@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { User, Lock, ArrowRight, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import logo from './assets/naf-logo-animated.gif';
 import { COLORS } from './designTokens';
+import { useTranslation } from './i18n.jsx';
 
 export default function LoginPage({ onLogin }) {
+    const { t } = useTranslation();
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -38,11 +40,11 @@ export default function LoginPage({ onLogin }) {
 
                 onLogin(userData);
             } else {
-                setError("Invalid Credentials. Please try again.");
+                setError(t('Invalid Credentials. Please try again.'));
             }
         } catch (err) {
             console.error("Login error:", err);
-            setError("Network error. Please check your connection.");
+            setError(t('Network error. Please check your connection.'));
         } finally {
             setLoading(false);
         }
@@ -61,10 +63,10 @@ export default function LoginPage({ onLogin }) {
                 {/* Logo Section */}
                 <div className="flex flex-col items-center mb-8">
                     <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mb-4 shadow-2xl backdrop-blur-sm">
-                        <img src={logo} alt="NAF Logo" className="w-full h-full object-cover rounded-2xl" />
+                        <img src={logo} alt={t("NAF Logo")} className="w-full h-full object-cover rounded-2xl" />
                     </div>
-                    <h1 className="text-2xl font-bold font-heading tracking-tight" style={{ color: COLORS.text.heading }}>NAF SUPPORT</h1>
-                    <p className="text-sm opacity-50 mt-1 force-satoshi" style={{ color: COLORS.text.body }}>Sign in to access the admin dashboard</p>
+                    <h1 className="text-2xl font-bold font-heading tracking-tight" style={{ color: COLORS.text.heading }}>{t("NAF SUPPORT")}</h1>
+                    <p className="text-sm opacity-50 mt-1 force-satoshi" style={{ color: COLORS.text.body }}>{t("Sign in to access the admin dashboard")}</p>
                 </div>
 
                 {/* Card */}
@@ -81,7 +83,7 @@ export default function LoginPage({ onLogin }) {
 
                         <div className="space-y-1.5">
                             <label className="text-xs font-bold uppercase tracking-wider opacity-60 ml-1 force-satoshi" style={{ color: COLORS.text.heading }}>
-                                Username
+                                {t('Username')}
                             </label>
                             <div className="relative group">
                                 <User className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 transition-colors group-focus-within:text-[#7FEE64]" style={{ color: COLORS.text.disabled }} />
@@ -97,7 +99,7 @@ export default function LoginPage({ onLogin }) {
                                     }}
                                     onFocus={(e) => e.target.style.borderColor = COLORS.primary[500]}
                                     onBlur={(e) => e.target.style.borderColor = 'transparent'}
-                                    placeholder="Enter your username"
+                                    placeholder={t("Enter your username")}
                                     required
                                 />
                             </div>
@@ -105,7 +107,7 @@ export default function LoginPage({ onLogin }) {
 
                         <div className="space-y-1.5">
                             <label className="text-xs font-bold uppercase tracking-wider opacity-60 ml-1 force-satoshi" style={{ color: COLORS.text.heading }}>
-                                Password
+                                {t('Password')}
                             </label>
                             <div className="relative group">
                                 <Lock className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 transition-colors group-focus-within:text-[#7FEE64]" style={{ color: COLORS.text.disabled }} />
@@ -146,7 +148,7 @@ export default function LoginPage({ onLogin }) {
                                 onChange={(e) => setRememberMe(e.target.checked)}
                                 className="w-4 h-4 rounded border-white/20 bg-transparent accent-[#7FEE64]"
                             />
-                            <span className="text-xs text-white/50 force-satoshi">Remember me</span>
+                            <span className="text-xs text-white/50 force-satoshi">{t("Remember me")}</span>
                         </label>
 
                         <button
@@ -158,7 +160,7 @@ export default function LoginPage({ onLogin }) {
                             {loading ? (
                                 <div className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" />
                             ) : (
-                                <>Sign In <ArrowRight className="w-4 h-4" /></>
+                                <>{t('Sign In')} <ArrowRight className="w-4 h-4" /></>
                             )}
                         </button>
                     </form>

@@ -31,6 +31,7 @@ import {
 import logo from './assets/naf-logo-animated.gif';
 import LoginPage from './LoginPage';
 import { COLORS, getAuthHeaders, timeAgo } from './designTokens';
+import { useTranslation } from './i18n.jsx';
 
 const TICKETS_PER_PAGE = 10;
 const N8N_TICKET_EVENTS_URL = import.meta.env.VITE_N8N_TICKET_EVENTS_URL || 'https://n8n.naf-cloudsystem.de/webhook/ticket-events';
@@ -57,14 +58,14 @@ function ticketYear(value) {
   }).format(date));
 }
 
-function formatTicketShortDate(value) {
+function formatTicketShortDate(value, locale = 'de-DE') {
   const date = parseTicketDate(value);
   if (!date) return '';
-  return date.toLocaleDateString('en-GB', {
+  return date.toLocaleDateString(locale, {
     timeZone: DISPLAY_TIME_ZONE,
     day: '2-digit',
     month: 'short'
-  }) + ' · ' + date.toLocaleTimeString('en-GB', {
+  }) + ' · ' + date.toLocaleTimeString(locale, {
     timeZone: DISPLAY_TIME_ZONE,
     hour: '2-digit',
     minute: '2-digit',
@@ -72,19 +73,19 @@ function formatTicketShortDate(value) {
   });
 }
 
-function formatTicketDate(value) {
+function formatTicketDate(value, locale = 'de-DE') {
   const date = parseTicketDate(value);
   if (!date) return '';
   const zone = new Intl.DateTimeFormat('en-GB', {
     timeZone: DISPLAY_TIME_ZONE,
     timeZoneName: 'short'
   }).formatToParts(date).find(part => part.type === 'timeZoneName')?.value || 'Germany time';
-  return date.toLocaleDateString('en-GB', {
+  return date.toLocaleDateString(locale, {
     timeZone: DISPLAY_TIME_ZONE,
     day: '2-digit',
     month: 'short',
     year: 'numeric'
-  }) + ', ' + date.toLocaleTimeString('en-GB', {
+  }) + ', ' + date.toLocaleTimeString(locale, {
     timeZone: DISPLAY_TIME_ZONE,
     hour: '2-digit',
     minute: '2-digit',
@@ -361,6 +362,38 @@ function normalizeChannel(value) {
   return 'Website form';
 }
 
+const MISSING_VALUE_MARKERS = new Set([
+  '',
+  '-',
+  '—',
+  'n/a',
+  'k.a.',
+  'k. a.',
+  'not provided',
+  'nicht angegeben'
+]);
+
+function normalizeMissingValue(value) {
+  const normalized = String(value ?? '').trim();
+  return MISSING_VALUE_MARKERS.has(normalized.toLowerCase()) ? 'N/A' : normalized;
+}
+
+function isMissingValue(value) {
+  return normalizeMissingValue(value) === 'N/A';
+}
+
+function displayRequestType(value, t) {
+  return t(normalizeRequestType(value));
+}
+
+function displayAccountType(value, t) {
+  return t(ACCOUNT_TYPE_MAPPING[value] || value || 'Customer / Guest');
+}
+
+function displayChannel(value, t) {
+  return t(normalizeChannel(value));
+}
+
 function extractEmailAddress(...values) {
   for (const value of values) {
     if (!value) continue;
@@ -397,6 +430,7 @@ function normalizeWhatsAppPhone(value) {
 
 
 export default function App() {
+  const { t, lang, locale } = useTranslation();
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     const saved = localStorage.getItem('authData') || sessionStorage.getItem('authData');
     return saved ? JSON.parse(saved) : false;
@@ -407,6 +441,7 @@ export default function App() {
   const [fetchError, setFetchError] = useState(null);
   const [toast, setToast] = useState(null);
   const refreshInFlight = useRef(false);
+  const notifiedWebsiteTickets = useRef(new Set());
 
   const handleLogout = () => {
     localStorage.removeItem('authData');
@@ -560,15 +595,14 @@ export default function App() {
             || item.data?.phoneNumber
             || item.customer?.phoneNumber
             || '';
-          const machineLocation = item.machineLocation
+          const machineLocation = normalizeMissingValue(item.machineLocation
             || item.location
             || item.machineId
             || item.issueData?.machineLocation
             || item.issueData?.location
             || item.data?.machineLocation
             || item.data?.location
-            || parsedLocation
-            || 'N/A';
+            || parsedLocation);
           const rawEmail = extractedEmail;
           const rawChannel = String(
             item.source
@@ -613,7 +647,7 @@ export default function App() {
             description: descText,
             location: machineLocation,
             machineLocation,
-            machineId: item.machineId || "N/A",
+            machineId: normalizeMissingValue(item.machineId),
             accountType: isEmailIntake ? "Not collected" : (ACCOUNT_TYPE_MAPPING[item.accountType] || item.accountType || "Customer / Guest"),
             urgency: ["Normal"],
             status: String(item.status || "OPEN").toUpperCase(),
@@ -629,6 +663,24 @@ export default function App() {
       });
 
       docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      // Auto-send confirmation emails for new website-form tickets
+      const isFirstLoad = notifiedWebsiteTickets.current.size === 0;
+      if (isFirstLoad) {
+        docs.forEach(d => notifiedWebsiteTickets.current.add(d.id));
+      } else {
+        docs.forEach(d => {
+          if (!notifiedWebsiteTickets.current.has(d.id) && d.channel === 'Website form' && d.email) {
+            notifiedWebsiteTickets.current.add(d.id);
+            // Auto-notification disabled: the public Support Page now triggers the webhook instantly via Option B.
+            // notifyTicketEvent(d, 'TICKET_RECEIVED', {})
+            //  .catch(err => console.warn('Auto-notification for website ticket failed:', d.ticketId, err.message));
+          } else {
+            notifiedWebsiteTickets.current.add(d.id);
+          }
+        });
+      }
+
       // Merge local-only data (emails, closedAt) that isn't in the API response
       setTickets(prev => {
         const prevMap = {};
@@ -715,6 +767,7 @@ export default function App() {
 
 
 function AdminLayout({ children, onLogout }) {
+  const { t, lang, setLang, locale } = useTranslation();
   const [langOpen, setLangOpen] = useState(false);
   const langRef = useRef(null);
 
@@ -734,8 +787,8 @@ function AdminLayout({ children, onLogout }) {
         <header className="flex items-center justify-between gap-3 shrink-0" style={{ minHeight: '56px' }}>
           {/* Left: Logo + Brand */}
           <div className="flex items-center gap-[10px]">
-            <img src={logo} alt="NAF logo" className="h-7 w-7 rounded-full object-cover" />
-            <span className="font-semibold text-[17px]" style={{ color: '#EDF0F2' }}>NAF Support</span>
+            <img src={logo} alt={t('NAF Logo')} className="h-7 w-7 rounded-full object-cover" />
+            <span className="font-semibold text-[17px]" style={{ color: '#EDF0F2' }}>{t("NAF Support")}</span>
           </div>
 
           {/* Right: Language + Admin */}
@@ -747,37 +800,35 @@ function AdminLayout({ children, onLogout }) {
                 style={{ borderColor: '#282C2F' }}
               >
                 <Globe className="w-[16px] h-[16px]" style={{ color: '#A0A8AD' }} />
-                <span className="hidden sm:inline text-[13px] font-medium" style={{ color: '#A0A8AD' }}>Language: English</span>
+                <span className="hidden sm:inline text-[13px] font-medium" style={{ color: '#A0A8AD' }}>{t('Language')}: {lang === 'de' ? t('Deutsch') : t('English')}</span>
                 <span className="text-[13px] font-medium" style={{ color: '#A0A8AD' }}>&darr;</span>
               </button>
 
               {langOpen && (
                 <div className="absolute right-0 top-12 w-[284px] rounded-[10px] p-4 flex flex-col gap-3 shadow-xl z-50" style={{ backgroundColor: '#111315', border: '1px solid #282C2F' }}>
-                  <div className="text-[14px] font-semibold" style={{ color: '#EDF0F2' }}>Interface language</div>
+                  <div className="text-[14px] font-semibold" style={{ color: '#EDF0F2' }}>{t('Interface language')}</div>
                   
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-[7px] border cursor-default" style={{ backgroundColor: '#17241A', borderColor: '#345135' }}>
-                    <span className="text-[12px] font-medium" style={{ color: '#5CEB47' }}>English</span>
-                    <Check className="w-3.5 h-3.5 ml-auto" style={{ color: '#5CEB47' }} />
-                  </div>
+                  <button type="button" onClick={() => { setLang('en'); setLangOpen(false); }} className="flex items-center gap-2 px-3 py-1.5 rounded-[7px] border cursor-pointer hover:opacity-80 transition-opacity" style={{ backgroundColor: lang === 'en' ? '#17241A' : 'transparent', borderColor: lang === 'en' ? '#345135' : '#282C2F' }}>
+                    <span className="text-[12px] font-medium" style={{ color: lang === 'en' ? '#5CEB47' : '#A0A8AD' }}>English</span>
+                    {lang === 'en' && <Check className="w-3.5 h-3.5 ml-auto" style={{ color: '#5CEB47' }} />}
+                  </button>
                   
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-[7px] border cursor-not-allowed opacity-55" style={{ borderColor: '#282C2F' }}>
-                    <span className="text-[12px] font-medium" style={{ color: '#A0A8AD' }}>Deutsch &middot; Coming later</span>
-                  </div>
-                  
-                  <div className="text-[11px]" style={{ color: '#6B707D' }}>
-                    German will be the default at launch.
-                  </div>
+                  <button type="button" onClick={() => { setLang('de'); setLangOpen(false); }} className="flex items-center gap-2 px-3 py-1.5 rounded-[7px] border cursor-pointer hover:opacity-80 transition-opacity" style={{ backgroundColor: lang === 'de' ? '#17241A' : 'transparent', borderColor: lang === 'de' ? '#345135' : '#282C2F' }}>
+                    <span className="text-[12px] font-medium" style={{ color: lang === 'de' ? '#5CEB47' : '#A0A8AD' }}>Deutsch</span>
+                    {lang === 'de' && <Check className="w-3.5 h-3.5 ml-auto" style={{ color: '#5CEB47' }} />}
+                  </button>
                 </div>
               )}
             </div>
 
             <div 
               onClick={onLogout}
-              className="flex items-start px-[12px] py-[8px] gap-[6px] rounded-[8px] border cursor-pointer hover:bg-white/5 transition-colors" 
+              className="group flex items-start px-[12px] py-[8px] gap-[6px] rounded-[8px] border cursor-pointer hover:bg-white/5 transition-colors"
               style={{ borderColor: '#26292E', backgroundColor: '#131416' }}
-              title="Click to logout"
+              title={t("Click to logout")}
             >
-              <span className="text-[11px] font-medium" style={{ color: '#A8ADB8' }}>Admin</span>
+              <span className="text-[11px] font-medium group-hover:hidden" style={{ color: '#A8ADB8' }}>{t('Admin')}</span>
+              <span className="hidden text-[11px] font-medium group-hover:inline" style={{ color: '#A8ADB8' }}>{t('Logout')}</span>
             </div>
           </div>
         </header>
@@ -797,6 +848,7 @@ function AdminLayout({ children, onLogout }) {
 /* CUSTOM COMPONENTS                                                          */
 /* -------------------------------------------------------------------------- */
 function PillButton({ label, active, onClick, count }) {
+  const { t } = useTranslation();
   return (
     <button
       onClick={onClick}
@@ -807,7 +859,7 @@ function PillButton({ label, active, onClick, count }) {
         color: active ? COLORS.primary[500] : COLORS.text.body,
       }}
     >
-      {label}{count != null ? `  ${count}` : ''}
+      {t(label)}{count != null ? `  ${count}` : ''}
     </button>
   );
 }
@@ -815,6 +867,7 @@ function PillButton({ label, active, onClick, count }) {
 
 
 function FilterSelect({ value, onChange, options, defaultLabel, menuWidth = 'w-[284px]' }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -834,7 +887,7 @@ function FilterSelect({ value, onChange, options, defaultLabel, menuWidth = 'w-[
           color: active ? COLORS.primary[500] : COLORS.text.body,
         }}
       >
-        {active ? value : defaultLabel}
+        {active ? t(value) : t(defaultLabel)}
       </button>
       <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
         <ChevronDown className="h-3 w-3" style={{ color: COLORS.text.disabled }} />
@@ -842,16 +895,16 @@ function FilterSelect({ value, onChange, options, defaultLabel, menuWidth = 'w-[
       {open && (
         <div className={`absolute top-[38px] left-0 z-50 ${menuWidth} max-h-[420px] overflow-y-auto rounded-[10px] border border-[#282C2F] bg-[#111315] p-4 shadow-xl shadow-black/40`}>
           <div className="flex flex-col gap-[10px]">
-            <div className="text-[15px] font-semibold leading-5 text-[#EFF2F0]">{defaultLabel}</div>
+            <div className="text-[15px] font-semibold leading-5 text-[#EFF2F0]">{t(defaultLabel)}</div>
             <div className="h-px w-full bg-[#282C2F]" />
             <button onClick={() => { onChange('All'); setOpen(false); }}
               className={`w-full text-left text-[13px] leading-5 transition-colors ${value === 'All' ? 'text-[#78EF63]' : 'text-[#EFF2F0] hover:text-[#78EF63]'}`}>
-              {defaultLabel === 'Request type' ? 'All request types' : 'All account types'}
+              {defaultLabel === 'Request type' ? t('All request types') : t('All account types')}
             </button>
             {options.map(opt => (
               <button key={opt} onClick={() => { onChange(opt); setOpen(false); }}
                 className={`w-full text-left text-[13px] leading-5 transition-colors ${value === opt ? 'text-[#78EF63]' : 'text-[#EFF2F0] hover:text-[#78EF63]'}`}>
-                {opt}
+                {t(opt)}
               </button>
             ))}
           </div>
@@ -863,6 +916,7 @@ function FilterSelect({ value, onChange, options, defaultLabel, menuWidth = 'w-[
 
 
 function DarkSelect({ name, value, onChange, placeholder, options, borderColor }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -877,7 +931,7 @@ function DarkSelect({ name, value, onChange, placeholder, options, borderColor }
       <button type="button" onClick={() => setOpen(!open)}
         className="w-full h-[42px] px-3 rounded-[7px] border bg-[#0C0D0E] text-[13px] text-left flex items-center justify-between outline-none cursor-pointer"
         style={{ borderColor: borderColor || '#24262B', color: displayLabel ? '#EFF2F0' : '#78828A' }}>
-        <span className="truncate">{displayLabel || placeholder}</span>
+        <span className="truncate">{displayLabel ? t(displayLabel) : placeholder}</span>
         <ChevronDown className="h-3 w-3 text-[#575C66] ml-2" />
       </button>
       {open && (
@@ -888,7 +942,7 @@ function DarkSelect({ name, value, onChange, placeholder, options, borderColor }
             return (
               <button key={val} type="button" onClick={() => { onChange({ target: { name, value: val } }); setOpen(false); }}
                 className={`w-full text-left px-3 py-2.5 text-[13px] transition-colors ${value === val ? 'text-[#47EB3D] bg-[#142917]' : 'text-[#C4C9D1] hover:bg-[#1A1C20]'}`}>
-                {label}
+                {t(label)}
               </button>
             );
           })}
@@ -900,12 +954,13 @@ function DarkSelect({ name, value, onChange, placeholder, options, borderColor }
 
 
 function QueueStat({ label, value, subtitle, valueColor }) {
+  const { t } = useTranslation();
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-[3px] p-4">
-      <span className="text-[12px] leading-5" style={{ color: COLORS.text.body }}>{label}</span>
+      <span className="text-[12px] leading-5" style={{ color: COLORS.text.body }}>{t(label)}</span>
       <div className="flex h-8 items-center gap-3">
         <span className="text-[26px] font-semibold leading-[35px]" style={{ color: valueColor || COLORS.text.heading }}>{value}</span>
-        {subtitle && <span className="text-[11px] leading-5" style={{ color: COLORS.text.body }}>{subtitle}</span>}
+        {subtitle && <span className="text-[11px] leading-5" style={{ color: COLORS.text.body }}>{t(subtitle)}</span>}
       </div>
     </div>
   );
@@ -913,6 +968,7 @@ function QueueStat({ label, value, subtitle, valueColor }) {
 
 /* -------------------------------------------------------------------------- */
 function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchError, onRetry, setTickets, setToast }) {
+  const { t, lang, locale } = useTranslation();
   const [filter, setFilter] = useState('All');
   const [channelFilter, setChannelFilter] = useState('All');
   const [reqTypeFilter, setReqTypeFilter] = useState('All');
@@ -974,7 +1030,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
     };
     fetchEmails();
   }, [viewTicket, emailTicket, isAuthenticated]);
-  const todayStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const todayStr = new Date().toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
 
   const stats = useMemo(() => ({
     open: tickets.filter(t => t.status === 'OPEN').length,
@@ -1037,7 +1093,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
     
     if (accTypeFilter !== 'All') {
       result = result.filter(t => {
-        const tAcc = ACCOUNT_TYPE_MAPPING[t.accountType] || t.accountType || 'Customer';
+        const tAcc = ACCOUNT_TYPE_MAPPING[t.accountType] || t.accountType || 'Customer / Guest';
         return tAcc === accTypeFilter;
       });
     }
@@ -1135,15 +1191,15 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
         ? updatedTicket.phone
         : updatedTicket.email;
       setToast({
-        title: notificationFailed ? `Status Saved, ${deliveryChannel} Notification Not Sent` : "Status Updated",
+        title: notificationFailed ? 'Status Updated' : t('Status Updated'),
         message: notificationFailed
-          ? `The ticket changed to ${newStatus}, but the customer notification failed: ${deliveryDestination || (deliveryChannel === 'WhatsApp' ? 'missing phone number' : 'missing email address')}`
-          : `Ticket status changed to ${newStatus}`,
+          ? `${t('Ticket status changed to')} ${t(newStatus === 'OPEN' ? 'Open' : newStatus === 'IN_PROGRESS' ? 'In Progress' : 'Closed')}. ${deliveryDestination || (deliveryChannel === 'WhatsApp' ? t('missing phone number') : t('missing email address'))}`
+          : `${t('Ticket status changed to')} ${t(newStatus === 'OPEN' ? 'Open' : newStatus === 'IN_PROGRESS' ? 'In Progress' : 'Closed')}`,
         variant: notificationFailed ? 'error' : undefined
       });
     } catch (error) {
       console.error("Error updating status:", error);
-      setToast({ title: "Update Failed", message: `Error: ${error.message}`, variant: 'error' });
+      setToast({ title: t('Update Failed'), message: `Error: ${error.message}`, variant: 'error' });
     } finally {
       setUpdatingId(null);
     }
@@ -1185,17 +1241,17 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
     const stored = emailHistory[ticket.id] || [];
     const initialEmail = {
       id: `initial-${ticket.id}`,
-      subject: ticket.subject || 'Support Request',
-      message: ticket.description || 'No description provided.',
+      subject: ticket.subject || t('Support Request'),
+      message: ticket.description || t('No description provided.'),
       sentAt: ticket.createdAt,
-      senderType: 'Customer',
-      senderName: ticket.contactPerson || 'Unknown',
+      senderType: t('Customer'),
+      senderName: ticket.contactPerson || t('Unknown'),
       senderEmail: ticket.email || '',
       direction: 'received',
       attachments: ticket.media || [],
     };
     return [initialEmail, ...stored];
-  }, [emailHistory]);
+  }, [emailHistory, t]);
 
   if (viewTicket) {
     return (
@@ -1216,8 +1272,8 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
       {/* Page Heading */}
       <div className="flex min-h-[66px] flex-wrap items-center gap-3 md:flex-nowrap">
         <div className="flex min-w-0 basis-[280px] flex-1 flex-col gap-1">
-          <h1 className="text-[28px] font-semibold leading-[38px] m-0" style={{ color: COLORS.text.heading }}>Support workspace</h1>
-          <p className="text-[13px] m-0" style={{ color: COLORS.text.body }}>Every request. One queue. Website form, email and WhatsApp.</p>
+          <h1 className="text-[28px] font-semibold leading-[38px] m-0" style={{ color: COLORS.text.heading }}>{t("Support workspace")}</h1>
+          <p className="text-[13px] m-0" style={{ color: COLORS.text.body }}>{t("Every request. One queue. Website form, email and WhatsApp.")}</p>
         </div>
         <div className="flex h-[34px] shrink-0 items-center rounded-[7px] border px-3"
           style={{ borderColor: COLORS.border }}>
@@ -1227,7 +1283,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
           onClick={() => { setSearchInput(''); setNewTicketOpen(true); }}
           className="flex h-[34px] shrink-0 items-center rounded-[7px] border px-3 text-xs font-medium transition-colors hover:opacity-90"
           style={{ backgroundColor: COLORS.primary[500], borderColor: COLORS.activeBorder, color: COLORS.backgrounds.main }}>
-          +  New ticket
+          {t('+  New ticket')}
         </button>
       </div>
 
@@ -1244,12 +1300,12 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
         <div className="flex items-center gap-4 p-4 rounded-[10px] border border-red-500/30 bg-red-500/10">
           <WifiOff className="w-5 h-5 text-red-400 flex-shrink-0" />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-red-300">Failed to load tickets</p>
+            <p className="text-sm font-semibold text-red-300">{t("Failed to load tickets")}</p>
             <p className="text-xs text-red-300/60">{fetchError}</p>
           </div>
           <button onClick={onRetry} disabled={refreshing}
             className="px-4 py-2 text-xs font-semibold rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 transition-colors flex items-center gap-2 disabled:opacity-50">
-            <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} /> {refreshing ? 'Retrying' : 'Retry'}
+            <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} /> {refreshing ? t('Retrying') : t('Retry')}
           </button>
         </div>
       )}
@@ -1275,7 +1331,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
                   type="text"
                   name="ticketSearch"
                   autoComplete="off"
-                  placeholder="Search name, email, phone, reference…"
+                  placeholder={t("Search name, email, phone, reference…")}
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   className="h-[36px] w-[322px] max-w-full rounded-[7px] border pl-3 pr-8 text-xs outline-none transition-colors focus:border-white/20"
@@ -1293,7 +1349,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
                 <PillButton label="Columns" active={columnsOpen} onClick={() => setColumnsOpen(!columnsOpen)} />
                 {columnsOpen && (
                   <div className="absolute right-0 top-[38px] z-50 w-[364px] max-h-[520px] overflow-y-auto rounded-[10px] border border-[#282C2F] bg-[#111315] p-4 shadow-xl shadow-black/40">
-                    <div className="text-[15px] font-semibold leading-5 text-[#EFF2F0]">Columns</div>
+                    <div className="text-[15px] font-semibold leading-5 text-[#EFF2F0]">{t("Columns")}</div>
                     <div className="my-[10px] h-px w-full bg-[#282C2F]" />
                     {Object.entries({
                       reference: 'Reference ID + created date/time',
@@ -1311,13 +1367,13 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
                           onChange={(e) => setVisibleColumns(prev => ({ ...prev, [key]: e.target.checked }))}
                           className="rounded-sm border-[#353A40] bg-transparent text-[#47EB3D] focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:opacity-40" />
                         <span className={`text-[12px] leading-5 ${visibleColumns[key] !== false ? 'text-[#EFF2F0]' : 'text-[#A0A8AD]'} transition-colors`}>
-                          {label}
+                          {t(label)}
                         </span>
                       </label>
                     ))}
                     <div className="mt-[10px] flex flex-col gap-[2px] text-[12px] leading-5 text-[#A0A8AD]">
-                      <div>＋ Phone number as separate column</div>
-                      <div>＋ Full message / description</div>
+                      <div>{t("＋ Phone number as separate column")}</div>
+                      <div>{t("＋ Full message / description")}</div>
                     </div>
                   </div>
                 )}
@@ -1357,7 +1413,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
                   onClick={() => { setChannelFilter('All'); setReqTypeFilter('All'); setAccTypeFilter('All'); }}
                   className="text-[11px] font-medium ml-2 underline underline-offset-2 transition-colors hover:opacity-80"
                   style={{ color: '#78828A' }}>
-                  Clear filters
+                  {t('Clear filters')}
                 </button>
               )}
             </div>}
@@ -1367,12 +1423,12 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
         <div className="hidden md:block">
           {/* Table Header */}
           <div className="flex items-center h-[40px] px-4 border-t border-b" style={{ borderColor: COLORS.border, backgroundColor: '#15181A' }}>
-            {visibleColumns.reference && <div className="w-[160px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">Reference / Created</div>}
-            {visibleColumns.subject && <div className="w-[430px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">Subject / Description</div>}
-            {visibleColumns.requester && <div className="w-[270px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">Requester / Account</div>}
-            {visibleColumns.machine && <div className="w-[230px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">Machine / Location</div>}
-            {visibleColumns.requestType && <div className="w-[260px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">Request type</div>}
-            {visibleColumns.status && <div className="w-[154px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">Status</div>}
+            {visibleColumns.reference && <div className="w-[160px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">{t("Reference / Created")}</div>}
+            {visibleColumns.subject && <div className="w-[430px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">{t("Subject / Description")}</div>}
+            {visibleColumns.requester && <div className="w-[270px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">{t("Requester / Account")}</div>}
+            {visibleColumns.machine && <div className="w-[230px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">{t("Machine / Location")}</div>}
+            {visibleColumns.requestType && <div className="w-[260px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">{t("Request type")}</div>}
+            {visibleColumns.status && <div className="w-[154px] shrink-0 text-[10px] font-medium leading-5 text-[#A0A8AD] uppercase">{t("Status")}</div>}
           </div>
 
           {/* Table Rows */}
@@ -1396,19 +1452,19 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
 
           <div className="flex items-center h-[46px] px-4 gap-3 border-t" style={{ borderColor: COLORS.border }}>
             <span className="text-xs" style={{ color: COLORS.text.body }}>
-              Showing {filtered.length === 0 ? 0 : (currentPage - 1) * TICKETS_PER_PAGE + 1}–{Math.min(currentPage * TICKETS_PER_PAGE, filtered.length)} of {filtered.length} active tickets
+              {t("Showing")} {filtered.length === 0 ? 0 : (currentPage - 1) * TICKETS_PER_PAGE + 1}–{Math.min(currentPage * TICKETS_PER_PAGE, filtered.length)} {t("of")} {filtered.length} {t("active tickets")}
             </span>
             <div className="flex-1" />
             <span className="flex items-center gap-2 text-[11px]" style={{ color: COLORS.text.disabled }}>
               <span className={`inline-block h-1.5 w-1.5 rounded-full ${refreshing ? 'animate-pulse bg-[#78EF63]' : 'bg-[#4B5358]'}`} />
-              {refreshing ? 'Refreshing' : 'Auto-refresh 30s'} · All times CEST
+              {refreshing ? t('Refreshing') : t('Auto-refresh 30s')}{t(' · All times CEST')}
             </span>
             <button
               type="button"
               onClick={onRetry}
               disabled={refreshing}
-              title="Refresh tickets"
-              aria-label="Refresh tickets"
+              title={t("Refresh tickets")}
+              aria-label={t("Refresh tickets")}
               className="flex h-[30px] w-[30px] items-center justify-center rounded-[7px] border transition-colors hover:bg-white/5 disabled:opacity-40"
               style={{ borderColor: COLORS.border, color: COLORS.text.body }}
             >
@@ -1519,18 +1575,19 @@ function SkeletonRow() {
 
 
 function EmptyState({ hasSearch }) {
+  const { t, lang, locale } = useTranslation();
   return (
     <div className="p-16 flex flex-col items-center justify-center text-center">
       <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
         <Inbox className="w-8 h-8 text-white/20" />
       </div>
       <h4 className="text-lg font-bold text-white/40 mb-1 font-heading">
-        {hasSearch ? 'No results found' : 'No tickets yet'}
+        {hasSearch ? t('No results found') : t('No tickets yet')}
       </h4>
       <p className="text-sm text-white/25 force-satoshi max-w-xs">
         {hasSearch
-          ? 'Try adjusting your search query or changing the status filter.'
-          : 'When support tickets are submitted, they will appear here.'}
+          ? t('Try adjusting your search query or changing the status filter.')
+          : t('When support tickets are submitted, they will appear here.')}
       </p>
     </div>
   );
@@ -1543,7 +1600,8 @@ function EmptyState({ hasSearch }) {
 
 
 function MobileTicketCard({ ticket, index, onEmailClick, onViewClick, onDeleteClick }) {
-  const displayTitle = ticket.subject || ticket.problemType || "No Subject";
+  const { t, lang, locale } = useTranslation();
+  const displayTitle = ticket.subject || ticket.problemType || t('No Subject');
 
   return (
     <div
@@ -1562,7 +1620,7 @@ function MobileTicketCard({ ticket, index, onEmailClick, onViewClick, onDeleteCl
         <span className={`text-[10px] font-bold px-2 py-0.5 rounded border force-satoshi ${ticket.status === 'CLOSED' ? 'border-[#35B814]/40 text-[#35B814] bg-[#35B814]/10' :
           ticket.status === 'IN_PROGRESS' ? 'border-yellow-500/40 text-yellow-500 bg-yellow-500/10' :
             'border-white/20 text-white/60 bg-white/5'
-          }`}>{ticket.status}</span>
+          }`}>{t(ticket.status === 'OPEN' ? 'Open' : ticket.status === 'IN_PROGRESS' ? 'In Progress' : 'Closed')}</span>
       </div>
 
       <div className="flex items-center gap-2 mb-3">
@@ -1575,13 +1633,13 @@ function MobileTicketCard({ ticket, index, onEmailClick, onViewClick, onDeleteCl
 
       <div className="flex gap-2 pt-2 border-t border-white/5">
         <button onClick={onViewClick} className="flex-1 py-2 text-xs text-white/50 hover:text-white hover:bg-white/5 rounded-lg transition-colors force-satoshi flex items-center justify-center gap-1">
-          <Eye className="w-3 h-3" /> View
+          <Eye className="w-3 h-3" /> {t('View')}
         </button>
         <button onClick={onEmailClick} className="flex-1 py-2 text-xs text-white/50 hover:text-[#7FEE64] hover:bg-[#7FEE64]/5 rounded-lg transition-colors force-satoshi flex items-center justify-center gap-1">
-          <Mail className="w-3 h-3" /> Email
+          <Mail className="w-3 h-3" /> {t('Email')}
         </button>
         <button onClick={onDeleteClick} className="flex-1 py-2 text-xs text-white/50 hover:text-red-400 hover:bg-red-500/5 rounded-lg transition-colors force-satoshi flex items-center justify-center gap-1">
-          <Trash2 className="w-3 h-3" /> Delete
+          <Trash2 className="w-3 h-3" /> {t('Delete')}
         </button>
       </div>
     </div>
@@ -1610,6 +1668,7 @@ function SkeletonCard() {
 
 
 function DeleteModal({ isAuthenticated, ticket, onClose, setTickets, setToast }) {
+  const { t, lang, locale } = useTranslation();
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async () => {
@@ -1629,11 +1688,11 @@ function DeleteModal({ isAuthenticated, ticket, onClose, setTickets, setToast })
       }
 
       setTickets(prev => prev.filter(t => t.id !== ticket.id));
-      if (setToast) setToast({ title: "Ticket Deleted", message: `Ticket ${ticket.ticketId} has been removed.` });
+      if (setToast) setToast({ title: t('Ticket Deleted'), message: `Ticket ${ticket.ticketId} ${t('has been removed.')}` });
       onClose();
     } catch (err) {
       console.error("Delete failed:", err);
-      if (setToast) setToast({ title: "Delete Failed", message: `Error: ${err.message}`, variant: 'error' });
+      if (setToast) setToast({ title: t('Delete Failed'), message: `Error: ${err.message}`, variant: 'error' });
       setIsDeleting(false);
     }
   };
@@ -1646,10 +1705,9 @@ function DeleteModal({ isAuthenticated, ticket, onClose, setTickets, setToast })
             <AlertTriangle className="w-6 h-6 text-red-500" />
           </div>
           <div>
-            <h3 className="text-xl font-bold mb-2 font-heading" style={{ color: COLORS.text.heading }}>Delete Ticket?</h3>
+            <h3 className="text-xl font-bold mb-2 font-heading" style={{ color: COLORS.text.heading }}>{t("Delete Ticket?")}</h3>
             <p className="text-sm opacity-60 force-satoshi" style={{ color: COLORS.text.body }}>
-              Are you sure you want to delete ticket <span className="font-mono text-white">{ticket.ticketId}</span>? This action cannot be undone.
-            </p>
+              {t('Are you sure you want to delete ticket')} <span className="font-mono text-white">{ticket.ticketId}</span>? {t('This action cannot be undone.')}</p>
           </div>
 
           <div className="flex gap-3 w-full mt-4">
@@ -1657,14 +1715,14 @@ function DeleteModal({ isAuthenticated, ticket, onClose, setTickets, setToast })
               onClick={onClose}
               className="flex-1 px-4 py-3 text-sm font-bold bg-white/5 hover:bg-white/10 rounded-xl transition-colors text-white force-satoshi"
             >
-              Cancel
+              {t('Cancel')}
             </button>
             <button
               onClick={handleDelete}
               disabled={isDeleting}
               className="flex-1 px-4 py-3 text-sm font-bold bg-red-500 hover:bg-red-600 rounded-xl transition-colors text-white flex items-center justify-center gap-2 force-satoshi"
             >
-              {isDeleting ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Delete'}
+              {isDeleting ? <RefreshCw className="w-4 h-4 animate-spin" /> : t('Delete')}
             </button>
           </div>
         </div>
@@ -1680,9 +1738,12 @@ function DeleteModal({ isAuthenticated, ticket, onClose, setTickets, setToast })
 /* ADMIN TICKET ROW                                                           */
 /* -------------------------------------------------------------------------- */
 function AdminTicketRow({ ticket, isSelected, onClick, visibleColumns }) {
+  const { t, lang, locale } = useTranslation();
   const channel = ticket.channel || 'Website form';
+  const machineIdMissing = isMissingValue(ticket.machineId);
+  const locationMissing = isMissingValue(ticket.location);
   const mediaCount = ticket.media?.length || 0;
-  const mediaLabel = mediaCount > 0 ? `${mediaCount === 1 ? (ticket.media[0]?.type?.startsWith('image') ? 'Photo' : 'File') : 'Files'} · ${mediaCount} file${mediaCount > 1 ? 's' : ''}` : null;
+  const mediaLabel = mediaCount > 0 ? `${mediaCount === 1 ? (ticket.media[0]?.type?.startsWith('image') ? t('Photo') : t('File')) : t('Files')} · ${mediaCount} ${t(mediaCount > 1 ? 'files' : 'file')}` : null;
 
   const statusColor = ticket.status === 'OPEN' ? '#78EF63'
     : ticket.status === 'IN_PROGRESS' ? '#F1B568'
@@ -1700,39 +1761,39 @@ function AdminTicketRow({ ticket, isSelected, onClick, visibleColumns }) {
     >
       {/* REFERENCE / CREATED */}
       {visibleColumns.reference && <div className="w-[160px] shrink-0 flex flex-col pr-[14px]">
-        <span className="text-xs font-medium" style={{ color: COLORS.text.heading }}>#{ticket.ticketId}</span>
-        <span className="text-[11px]" style={{ color: COLORS.text.body }}>{formatTicketShortDate(ticket.createdAt)}</span>
-        {visibleColumns.source && <span className="text-[11px]" style={{ color: COLORS.text.body }}>{channel}</span>}
+        <span className="text-xs font-medium" style={{ color: COLORS.text.heading }}>{ticket.ticketId}</span>
+        <span className="text-[11px]" style={{ color: COLORS.text.body }}>{formatTicketShortDate(ticket.createdAt, locale)}</span>
+        {visibleColumns.source && <span className="text-[11px]" style={{ color: COLORS.text.body }}>{displayChannel(channel, t)}</span>}
       </div>}
 
       {/* SUBJECT / DESCRIPTION */}
       {visibleColumns.subject && <div className="w-[430px] shrink-0 flex flex-col pr-[14px]">
-        <span className="text-[13px] font-medium truncate" style={{ color: COLORS.text.heading }}>{ticket.subject || 'No Subject'}</span>
-        <span className="text-[11px] truncate" style={{ color: COLORS.text.body }}>{ticket.description || 'No description'}</span>
+        <span className="text-[13px] font-medium truncate" style={{ color: COLORS.text.heading }}>{ticket.subject || t('No Subject')}</span>
+        <span className="text-[11px] truncate" style={{ color: COLORS.text.body }}>{ticket.description || t('No description')}</span>
         {mediaLabel
           ? <span className="text-[11px]" style={{ color: COLORS.text.body }}>{mediaLabel}</span>
-          : <span className="text-[11px]" style={{ color: COLORS.text.disabled }}>No media</span>
+          : <span className="text-[11px]" style={{ color: COLORS.text.disabled }}>{t('No media')}</span>
         }
       </div>}
 
       {/* REQUESTER / ACCOUNT */}
       {visibleColumns.requester && <div className="w-[270px] shrink-0 flex flex-col pr-[14px]">
-        <span className="text-[13px] font-medium" style={{ color: COLORS.text.heading }}>{ticket.contactPerson || 'Unknown User'}</span>
+        <span className="text-[13px] font-medium" style={{ color: COLORS.text.heading }}>{ticket.contactPerson || t('Unknown User')}</span>
         <span className="text-[11px] truncate" style={{ color: COLORS.text.body }}>{ticket.email || ticket.phone || '-'}</span>
-        <span className="text-[11px]" style={{ color: !ticket.accountType || ticket.accountType === 'Customer' ? COLORS.text.body : COLORS.secondary[500] }}>
-          {ACCOUNT_TYPE_MAPPING[ticket.accountType] || ticket.accountType || 'Customer / Guest'}
+        <span className="text-[11px]" style={{ color: !ticket.accountType || ticket.accountType === t('Customer') ? COLORS.text.body : COLORS.secondary[500] }}>
+          {displayAccountType(ticket.accountType, t)}
         </span>
       </div>}
 
       {/* MACHINE / LOCATION */}
       {visibleColumns.machine && <div className="w-[230px] shrink-0 flex flex-col pr-[14px]">
-        {ticket.machineId && ticket.machineId !== 'N/A' && ticket.machineId !== '' ? (
+        {!machineIdMissing ? (
           <span className="text-xs" style={{ color: COLORS.text.heading }}>{ticket.machineId}</span>
         ) : (
-          <span className="text-[12px]" style={{ color: COLORS.text.disabled }}>Not provided</span>
+          <span className="text-[12px]" style={{ color: COLORS.text.disabled }}>{t('Not provided')}</span>
         )}
         
-        {ticket.location && ticket.location !== 'N/A' && ticket.location !== '' ? (
+        {!locationMissing ? (
           <span className="text-[11px]" style={{ color: COLORS.text.body }}>{ticket.location}</span>
         ) : (
           <span className="text-[11px]" style={{ color: COLORS.text.body }}>—</span>
@@ -1741,12 +1802,12 @@ function AdminTicketRow({ ticket, isSelected, onClick, visibleColumns }) {
 
       {/* REQUEST TYPE */}
       {visibleColumns.requestType && <div className="w-[260px] shrink-0 pr-[14px]">
-        <span className="text-xs" style={{ color: COLORS.text.heading }}>{normalizeRequestType(ticket.requestType)}</span>
+         <span className="text-xs" style={{ color: COLORS.text.heading }}>{displayRequestType(ticket.requestType, t)}</span>
       </div>}
 
       {/* STATUS */}
       {visibleColumns.status && <div className="w-[154px] shrink-0 pr-[14px]">
-        <span className="text-xs font-medium" style={{ color: statusColor }}>{statusLabel}</span>
+         <span className="text-xs font-medium" style={{ color: statusColor }}>{t(statusLabel)}</span>
       </div>}
     </div>
   );
@@ -1763,6 +1824,7 @@ function AdminTicketRow({ ticket, isSelected, onClick, visibleColumns }) {
 /* -------------------------------------------------------------------------- */
 
 function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, onEmailSent, setToast }) {
+  const { t, lang, locale } = useTranslation();
   const [replyMode, setReplyMode] = useState('email'); // 'email' or 'internal'
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -1772,6 +1834,11 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
   const replyFileInputRef = useRef(null);
 
   const channel = ticket.channel || 'Website form';
+  const detailMachineLocation = !isMissingValue(ticket.machineLocation)
+    ? ticket.machineLocation
+    : !isMissingValue(ticket.machineId)
+      ? ticket.machineId
+      : ticket.location;
   
   const handleReplyFileChange = (event) => {
     const files = Array.from(event.target.files || []);
@@ -1784,7 +1851,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
 
     setAttachmentError(validFiles.length === files.length
       ? ''
-      : 'Only image or PDF files smaller than 5 MB can be attached.');
+      : t('Only image or PDF files smaller than 5 MB can be attached.'));
     setReplyAttachments(prev => [...prev, ...validFiles]);
     event.target.value = '';
   };
@@ -1812,7 +1879,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
         attachments: replyAttachments.map(fileAttachmentMetadata),
         sentAt: new Date().toISOString(),
         senderType: 'Admin',
-        senderName: 'NAF Support',
+        senderName: t('NAF Support'),
         direction: 'sent',
       };
       
@@ -1820,10 +1887,10 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
       await onEmailSent(ticket.id, newEmail);
       const destination = channel === 'WhatsApp' ? ticket.phone : ticket.email;
       setToast({
-        title: webhookSuccess ? "Reply sent" : "Reply saved, delivery failed",
+        title: webhookSuccess ? t('Reply sent') : t('Reply saved, delivery failed'),
         message: webhookSuccess
-          ? `Reply sent to ${destination || 'the customer'}`
-          : 'The reply was saved locally, but n8n could not deliver it to WhatsApp/email.',
+          ? `${t('Reply sent to')} ${destination || t('the customer')}`
+          : t('The reply was saved locally, but n8n could not deliver it to WhatsApp/email.'),
         variant: webhookSuccess ? undefined : 'error'
       });
     } else {
@@ -1839,7 +1906,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
         direction: 'sent',
       };
       await onEmailSent(ticket.id, newEmail);
-      setToast({ title: "Note Added", message: "Internal note saved to conversation." });
+      setToast({ title: t('Note Added'), message: t('Internal note saved to conversation.') });
     }
     
     setMessage('');
@@ -1860,45 +1927,47 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
   const statusLabel = ticket.status === 'OPEN' ? 'Open'
     : ticket.status === 'IN_PROGRESS' ? 'In Progress'
     : 'Closed';
+  const detailTitle = `${ticket.ticketId || ''} · ${ticket.subject || ticket.problemType || t('No Subject')}`;
+  const detailTitleSize = detailTitle.length > 105 ? 'text-[14px]' : detailTitle.length > 70 ? 'text-[17px]' : 'text-[20px]';
 
   return (
     <div className="fixed inset-0 z-40 mx-auto flex h-full min-h-0 w-full max-w-[1600px] flex-col overflow-hidden bg-[#09090A]" style={{ fontFamily: "'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
       {/* Header */}
       <div className="flex shrink-0 flex-col gap-3 border-b border-[#212429] bg-[#09090A] px-4 py-3 sm:h-[70px] sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-0">
-        <div className="flex min-w-0 items-center gap-2.5 sm:gap-3.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3.5">
           <button onClick={onBack} className="px-3 py-2 rounded-[10px] border border-[#282C2F] bg-[#111315] hover:bg-white/5 transition-colors">
-            <span className="text-xs font-medium text-[#B2B8C2]">← Back</span>
+            <span className="text-xs font-medium text-[#B2B8C2]">{t("← Back")}</span>
           </button>
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-[20px] font-semibold text-[#EBEDF2] font-heading">#{ticket.ticketId} · {ticket.subject || ticket.problemType || 'No Subject'}</span>
-            <span className="text-[11px] text-[#737885]">{channel} · {ticket.contactPerson} · Created {formatTicketDate(ticket.createdAt)}</span>
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className={`${detailTitleSize} min-w-0 max-w-full truncate font-semibold text-[#EBEDF2] font-heading`} title={detailTitle}>{detailTitle}</span>
+            <span className="min-w-0 max-w-full truncate text-[11px] text-[#737885]">{displayChannel(channel, t)} · {ticket.contactPerson} · {t('Created ')}{formatTicketDate(ticket.createdAt, locale)}</span>
           </div>
         </div>
         
         <div className="flex flex-wrap items-center gap-2">
           {isUpdating && <RefreshCw className="w-4 h-4 text-white animate-spin mr-2" />}
           <div className="px-3 py-2 rounded-[10px] border" style={{ backgroundColor: statusBg, borderColor: statusBorder }}>
-            <span className="text-[11px] font-medium" style={{ color: statusColor }}>{statusLabel}</span>
+            <span className="text-[11px] font-medium" style={{ color: statusColor }}>{t(statusLabel)}</span>
           </div>
           
           {ticket.status === 'OPEN' && (
             <>
               <button onClick={() => onStatusChange(ticket.id, 'IN_PROGRESS')} disabled={isUpdating} className="h-[34px] px-3 rounded-[7px] border border-[#345135] bg-[#78EF63] hover:opacity-90 transition-opacity">
-                <span className="text-xs font-medium text-[#0C0D0E]">Start progress</span>
+                <span className="text-xs font-medium text-[#0C0D0E]">{t("Start progress")}</span>
               </button>
               <button onClick={() => onStatusChange(ticket.id, 'CLOSED')} disabled={isUpdating} className="px-3 py-2 rounded-[10px] border border-[#572629] bg-[#291214] hover:opacity-90 transition-opacity">
-                <span className="text-[11px] font-medium text-[#F58C91]">Close ticket</span>
+                <span className="text-[11px] font-medium text-[#F58C91]">{t("Close ticket")}</span>
               </button>
             </>
           )}
           {ticket.status === 'IN_PROGRESS' && (
             <button onClick={() => onStatusChange(ticket.id, 'CLOSED')} disabled={isUpdating} className="px-3 py-2 rounded-[10px] border border-[#572629] bg-[#291214] hover:opacity-90 transition-opacity">
-              <span className="text-[11px] font-medium text-[#F58C91]">Close ticket</span>
+              <span className="text-[11px] font-medium text-[#F58C91]">{t("Close ticket")}</span>
             </button>
           )}
           {ticket.status === 'CLOSED' && (
             <button onClick={() => onStatusChange(ticket.id, 'OPEN')} disabled={isUpdating} className="h-[34px] px-3 rounded-[7px] border border-[#345135] bg-[#78EF63] hover:opacity-90 transition-opacity">
-              <span className="text-xs font-medium text-[#0C0D0E]">Reopen ticket</span>
+              <span className="text-xs font-medium text-[#0C0D0E]">{t("Reopen ticket")}</span>
             </button>
           )}
         </div>
@@ -1910,32 +1979,32 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
           
           {/* Ticket Details */}
           <div className="p-4 flex flex-col gap-3.5 rounded-[14px] border border-[#212429] bg-[#0C0C0E]">
-            <span className="text-xs font-semibold text-[#D1D6DE]">Ticket details</span>
+            <span className="text-xs font-semibold text-[#D1D6DE]">{t("Ticket details")}</span>
             <div className="flex justify-between items-center">
-              <span className="text-[10px] text-[#6B707D]">Source</span>
-              <span className="text-[10px] font-medium text-[#52D170]">{channel}</span>
+              <span className="text-[10px] text-[#6B707D]">{t("Source")}</span>
+              <span className="text-[10px] font-medium text-[#52D170]">{displayChannel(channel, t)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-[10px] text-[#6B707D]">Request type</span>
-              <span className="text-[10px] font-medium text-[#B8BDC7]">{normalizeRequestType(ticket.requestType)}</span>
+              <span className="text-[10px] text-[#6B707D]">{t("Request type")}</span>
+              <span className="text-[10px] font-medium text-[#B8BDC7]">{displayRequestType(ticket.requestType, t)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-[10px] text-[#6B707D]">Account type</span>
-              <span className="text-[10px] font-medium text-[#B8BDC7]">{ACCOUNT_TYPE_MAPPING[ticket.accountType] || ticket.accountType || 'Customer / Guest'}</span>
+              <span className="text-[10px] text-[#6B707D]">{t("Account type")}</span>
+              <span className="text-[10px] font-medium text-[#B8BDC7]">{displayAccountType(ticket.accountType, t)}</span>
             </div>
           </div>
 
           {/* Requester */}
           <div className="p-4 flex flex-col gap-3.5 rounded-[14px] border border-[#212429] bg-[#0C0C0E]">
-            <span className="text-xs font-semibold text-[#D1D6DE]">Requester</span>
-            <span className="text-[13px] font-semibold text-[#E8EBF0]">{ticket.contactPerson || 'Unknown User'}</span>
+            <span className="text-xs font-semibold text-[#D1D6DE]">{t("Requester")}</span>
+            <span className="text-[13px] font-semibold text-[#E8EBF0]">{ticket.contactPerson || t('Unknown User')}</span>
             {ticket.email && <span className="text-[10px] text-[#7A808C]">{ticket.email}</span>}
             {ticket.phone && <span className="text-[10px] text-[#7A808C]">{ticket.phone}</span>}
-            <span className="text-[11px] text-[#A0A8AD]">{ACCOUNT_TYPE_MAPPING[ticket.accountType] || ticket.accountType || 'Customer / Guest'}</span>
+            <span className="text-[11px] text-[#A0A8AD]">{displayAccountType(ticket.accountType, t)}</span>
             <div className="-mt-1 flex flex-col gap-2.5">
               <div className="flex justify-between items-center">
-                <span className="text-[10px] text-[#6B707D]">Machine ID / Location</span>
-                <span className="max-w-[170px] text-right text-[10px] font-medium text-[#B8BDC7]">{ticket.machineLocation || (ticket.machineId && ticket.machineId !== 'N/A' ? ticket.machineId : ticket.location) || 'N/A'}</span>
+                <span className="text-[10px] text-[#6B707D]">{t("Machine ID / Location")}</span>
+                <span className="max-w-[170px] text-right text-[10px] font-medium text-[#B8BDC7]">{isMissingValue(detailMachineLocation) ? t('N/A') : detailMachineLocation}</span>
               </div>
             </div>
           </div>
@@ -1944,8 +2013,8 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
         {/* Conversation Workspace */}
         <div className="flex min-h-[430px] w-full min-w-0 flex-col">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[14px] font-semibold text-[#E5E8ED]">Conversation</span>
-            <span className="text-[10px] text-[#6E7380]">{channel === 'WhatsApp' ? 'WhatsApp → WhatsApp replies' : `${channel} → Email replies`}</span>
+            <span className="text-[14px] font-semibold text-[#E5E8ED]">{t("Conversation")}</span>
+            <span className="text-[10px] text-[#6E7380]">{channel === 'WhatsApp' ? `${t('WhatsApp')} → ${t('WhatsApp')} ${t('replies')}` : `${displayChannel(channel, t)} → ${t('Email')} ${t('replies')}`}</span>
           </div>
 
           {/* Timeline */}
@@ -1961,17 +2030,17 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
               if (isInternal) msgStyle = { border: 'border-[#45361A]', bg: 'bg-[#1B1409]', metaColor: 'text-[#F5B24F]' };
               if (isServiceTeam) msgStyle = { border: 'border-[#2E2940]', bg: 'bg-[#13111A]', metaColor: 'text-[#AB99F2]' };
 
-              const timeStr = new Date(msg.sentAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+              const timeStr = new Date(msg.sentAt).toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' });
 
               return (
                 <div key={i} className={`p-3.5 flex flex-col gap-[9px] rounded-[14px] border ${msgStyle.border} ${msgStyle.bg}`}>
                   <div className="flex justify-between items-start">
                     <span className={`text-[10px] font-medium ${msgStyle.metaColor}`}>
                       {isInternal
-                        ? 'Internal note'
+                        ? t('Internal note')
                         : isServiceTeam
-                          ? `${msg.senderName} · Internal`
-                          : `${msg.senderName} · ${isCustomer ? channel : (channel === 'WhatsApp' ? 'WhatsApp' : 'Email')}`}
+                          ? `${msg.senderName} · ${t('Internal')}`
+                          : `${msg.senderName} · ${displayChannel(isCustomer ? channel : (channel === 'WhatsApp' ? 'WhatsApp' : 'Email'), t)}`}
                     </span>
                     <span className="text-[10px] text-[#666B78]">{timeStr}</span>
                   </div>
@@ -1986,7 +2055,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                           const attachmentType = att.type || att.mimeType || att.contentType || '';
                           const isImageAttachment = attachmentType.startsWith('image') || /\.(png|jpe?g|gif|webp|avif)$/i.test(attachmentUrl || att.name || '');
                           const attachmentLabel = att.name || attachmentUrl.split('/').pop() || 'Attachment';
-                          const content = <><ImageIcon className="h-3 w-3" />{attachmentLabel} · {isImageAttachment ? 'Image' : 'File'}</>;
+                          const content = <><ImageIcon className="h-3 w-3" />{attachmentLabel} · {isImageAttachment ? t('Image') : t('File')}</>;
                           return attachmentUrl && isImageAttachment ? (
                             <button key={j} type="button" onClick={() => setPreviewAttachment({ ...att, url: attachmentUrl })}
                               className="flex w-fit max-w-[240px] flex-col items-start gap-2 rounded-[8px] border border-[#26352A] bg-[#0A100B] p-2 text-left text-[11px] text-[#78EF63] transition-colors hover:border-[#78EF63]/50">
@@ -2013,20 +2082,20 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
             {ticket.status === 'CLOSED' ? (
               <>
                 <div className="p-3.5 rounded-[10px] bg-[#080809]">
-                  <span className="text-[11px] text-[#575C66]">This ticket is closed. Reopen it to reply.</span>
+                  <span className="text-[11px] text-[#575C66]">{t("This ticket is closed. Reopen it to reply.")}</span>
                 </div>
                 <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-[9px] text-[#575C66]">{channel === 'WhatsApp' ? `To: ${ticket.phone} · Replies stay on WhatsApp.` : `To: ${ticket.email} · Replies stay on email.`}</span>
+                  <span className="text-[9px] text-[#575C66]">{t('To')}: {channel === 'WhatsApp' ? ticket.phone : ticket.email} · {channel === 'WhatsApp' ? t('Replies stay on WhatsApp.') : t('Replies stay on email.')}</span>
                 </div>
               </>
             ) : (
               <>
                 <div className="flex gap-2">
                   <button onClick={() => setReplyMode('email')} className={`px-3 py-1.5 rounded-[9px] border text-[10px] font-medium transition-colors ${replyMode === 'email' ? 'bg-[#142917] border-[#26522B] text-[#66EB5C]' : 'bg-[#0E0F10] border-[#24262B] text-[#8F94A1]'}`}>
-                    {channel === 'WhatsApp' ? 'Reply on WhatsApp' : 'Reply by email'}
+                    {channel === 'WhatsApp' ? t('Reply on WhatsApp') : t('Reply by email')}
                   </button>
                   <button onClick={() => setReplyMode('internal')} className={`px-3 py-1.5 rounded-[9px] border text-[10px] font-medium transition-colors ${replyMode === 'internal' ? 'bg-[#2A1E0D] border-[#4A3215] text-[#F5B24F]' : 'bg-[#0E0F10] border-[#24262B] text-[#8F94A1]'}`}>
-                    Internal note
+                    {t('Internal note')}
                   </button>
                 </div>
                 
@@ -2034,7 +2103,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                   <textarea 
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
-                    placeholder={replyMode === 'email' ? 'Write only the reply body. The email template already includes the greeting and closing.' : "Write an internal note…"}
+                    placeholder={replyMode === 'email' ? t('Write only the reply body. The email template already includes the greeting and closing.') : t('Write an internal note…')}
                     className="w-full bg-transparent p-3.5 text-[12px] text-[#C4C9D1] outline-none resize-none min-h-[80px]"
                   />
                 </div>
@@ -2071,14 +2140,14 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                 <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-[10px] text-[#A0A8AD]">
                     {replyMode === 'email' 
-                      ? (channel === 'WhatsApp' ? `To: ${ticket.phone} · Replies stay on WhatsApp.` : `To: ${ticket.email} · Replies stay on email.`)
-                      : 'Notes are only visible to staff.'}
+                      ? <>{t('To')}: {channel === 'WhatsApp' ? ticket.phone : ticket.email} · {channel === 'WhatsApp' ? t('Replies stay on WhatsApp.') : t('Replies stay on email.')}</>
+                      : t('Notes are only visible to staff.')}
                   </span>
                   <div className="flex items-center gap-2">
                     {replyMode === 'email' && (
-                      <button type="button" aria-label="Attach image or PDF" title="Attach image or PDF (under 5 MB)" onClick={() => replyFileInputRef.current?.click()} className="flex items-center gap-1.5 rounded-[9px] border border-[#282C2F] px-3 py-2 text-[10px] font-medium text-[#A0A8AD] transition-colors hover:border-[#78EF63]/50 hover:text-white">
+                      <button type="button" aria-label={t("Attach image or PDF")} title={t("Attach image or PDF (under 5 MB)")} onClick={() => replyFileInputRef.current?.click()} className="flex items-center gap-1.5 rounded-[9px] border border-[#282C2F] px-3 py-2 text-[10px] font-medium text-[#A0A8AD] transition-colors hover:border-[#78EF63]/50 hover:text-white">
                         <Paperclip className="h-3.5 w-3.5" />
-                        Attach
+                        {t('Attach')}
                       </button>
                     )}
                     <button 
@@ -2087,7 +2156,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                       className="px-3.5 py-2 rounded-[9px] bg-[#47EB3D] disabled:opacity-50 hover:opacity-90 transition-opacity flex items-center gap-1.5"
                     >
                       {sending && <RefreshCw className="w-3 h-3 text-[#050A05] animate-spin" />}
-                      <span className="text-[10px] font-semibold text-[#050A05]">{replyMode === 'email' ? 'Send reply' : 'Save note'}</span>
+                      <span className="text-[10px] font-semibold text-[#050A05]">{replyMode === 'email' ? t('Send reply') : t('Save note')}</span>
                     </button>
                   </div>
                 </div>
@@ -2101,11 +2170,11 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
           onClick={() => setPreviewAttachment(null)}>
           <div className="relative max-h-full max-w-full rounded-[10px] border border-[#282C2F] bg-[#111315] p-3 shadow-2xl"
             onClick={(event) => event.stopPropagation()}>
-            <button type="button" aria-label="Close image preview" onClick={() => setPreviewAttachment(null)}
+            <button type="button" aria-label={t("Close image preview")} onClick={() => setPreviewAttachment(null)}
               className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-[7px] border border-[#282C2F] bg-[#0C0D0E]/90 text-[#A0A8AD] hover:text-white">
               <X className="h-4 w-4" />
             </button>
-            <img src={previewAttachment.url} alt={previewAttachment.name || 'Ticket attachment'}
+            <img src={previewAttachment.url} alt={previewAttachment.name || t('Ticket attachment')}
               className="max-h-[80vh] max-w-[min(90vw,1100px)] rounded-[6px] object-contain" />
           </div>
         </div>
@@ -2127,6 +2196,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
 
 
 function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
+  const { t, lang, locale } = useTranslation();
   const [subject, setSubject] = useState(`Re: ${ticket.subject || ticket.ticketId}`);
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState([]);
@@ -2174,7 +2244,7 @@ function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
       attachments: attachments.map(fileAttachmentMetadata),
       sentAt: new Date().toISOString(),
       senderType: 'Admin',
-      senderName: 'Support Team',
+      senderName: t('Support Team'),
       direction: 'sent',
     };
 
@@ -2188,7 +2258,7 @@ function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
     if (setToast) {
       const attachText = attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : '';
       const statusText = webhookSuccess ? '' : ' (saved locally — n8n webhook pending setup)';
-      setToast({ title: "Email Sent Successfully", message: `Email sent to ${ticket.email}${attachText}${statusText}` });
+      setToast({ title: "Email Sent Successfully", message: `${t("Email sent to")} ${ticket.email}${attachText}${statusText}` });
     }
     onClose();
   };
@@ -2198,30 +2268,30 @@ function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
       <div className="w-full max-w-lg rounded-2xl border shadow-2xl p-6" style={{ backgroundColor: COLORS.backgrounds.main, borderColor: COLORS.border }} onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-6">
           <h3 className="text-xl font-bold flex items-center gap-2 font-heading" style={{ color: COLORS.text.heading }}>
-            <Mail className="w-5 h-5" style={{ color: COLORS.primary[500] }} /> Send Email
+            <Mail className="w-5 h-5" style={{ color: COLORS.primary[500] }} /> {t('Send Email')}
           </h3>
           <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors"><X className="w-5 h-5 opacity-50 text-white" /></button>
         </div>
 
         <form onSubmit={handleSend} className="space-y-4">
           <div>
-            <label className="text-xs font-medium opacity-50 block mb-1 force-satoshi text-white">To</label>
+            <label className="text-xs font-medium opacity-50 block mb-1 force-satoshi text-white">{t("To")}</label>
             <input disabled value={`${ticket.contactPerson} <${ticket.email}>`} className="w-full border rounded-lg px-3 py-2 text-sm cursor-not-allowed text-white/50 force-satoshi" style={{ backgroundColor: COLORS.backgrounds.card, borderColor: COLORS.border }} />
           </div>
 
           <div>
-            <label className="text-xs font-medium opacity-50 block mb-1 force-satoshi text-white">Subject</label>
+            <label className="text-xs font-medium opacity-50 block mb-1 force-satoshi text-white">{t("Subject")}</label>
             <input required value={subject} onChange={e => setSubject(e.target.value)} className="w-full border border-transparent rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-[#7FEE64] force-satoshi" style={{ backgroundColor: COLORS.backgrounds.input }} />
           </div>
 
           <div>
-            <label className="text-xs font-medium opacity-50 block mb-1 force-satoshi text-white">Message</label>
-            <textarea required rows={4} value={message} onChange={e => setMessage(e.target.value)} className="w-full border border-transparent rounded-lg px-3 py-2 text-sm text-white outline-none resize-none focus:border-[#7FEE64] force-satoshi" style={{ backgroundColor: COLORS.backgrounds.input }} placeholder="Write only the reply body. The email template already includes the greeting and closing." />
+            <label className="text-xs font-medium opacity-50 block mb-1 force-satoshi text-white">{t("Message")}</label>
+            <textarea required rows={4} value={message} onChange={e => setMessage(e.target.value)} className="w-full border border-transparent rounded-lg px-3 py-2 text-sm text-white outline-none resize-none focus:border-[#7FEE64] force-satoshi" style={{ backgroundColor: COLORS.backgrounds.input }} placeholder={t("Write only the reply body. The email template already includes the greeting and closing.")} />
           </div>
 
           {/* Attachments */}
           <div>
-            <label className="text-xs font-medium opacity-50 block mb-2 force-satoshi text-white">Attachments</label>
+            <label className="text-xs font-medium opacity-50 block mb-2 force-satoshi text-white">{t("Attachments")}</label>
             <input
               type="file"
               ref={fileInputRef}
@@ -2236,7 +2306,7 @@ function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
               className="w-full py-3 rounded-lg border border-dashed border-white/15 hover:border-[#7FEE64]/40 hover:bg-[#7FEE64]/5 transition-all flex items-center justify-center gap-2 text-white/40 hover:text-white/70 force-satoshi text-sm"
             >
               <Paperclip className="w-4 h-4" />
-              Click to attach files
+              {t('Click to attach files')}
             </button>
 
             {attachments.length > 0 && (
@@ -2261,9 +2331,9 @@ function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
           </div>
 
           <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-medium hover:bg-white/5 rounded-lg transition-colors text-white force-satoshi">Cancel</button>
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-medium hover:bg-white/5 rounded-lg transition-colors text-white force-satoshi">{t("Cancel")}</button>
             <button type="submit" disabled={sending} className="px-6 py-2 text-black text-sm font-bold rounded-lg hover:opacity-90 flex items-center gap-2 force-satoshi" style={{ backgroundColor: COLORS.primary[500] }}>
-              {sending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <><Send className="w-4 h-4" /> Send Email</>}
+              {sending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <><Send className="w-4 h-4" /> {t('Send Email')}</>}
             </button>
           </div>
         </form>
@@ -2279,6 +2349,7 @@ function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
 /* NEW TICKET MODAL                                                           */
 /* -------------------------------------------------------------------------- */
 function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
+  const { t, lang, locale } = useTranslation();
   const [channel, setChannel] = useState('Email');
   const [formData, setFormData] = useState({
     fullName: '',
@@ -2416,8 +2487,8 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
     } catch (err) {
       console.error('Ticket creation failed:', err);
       setSubmitError(err.name === 'AbortError'
-        ? 'The server took too long to respond. Please try again.'
-        : (err.message || 'Unable to create the ticket. Please try again.'));
+        ? t('The server took too long to respond. Please try again.')
+        : (err.message || t('Unable to create the ticket. Please try again.')));
     } finally {
       window.clearTimeout(timeoutId);
       setIsSubmitting(false);
@@ -2450,13 +2521,11 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={resetAndClose}>
         <div className="flex w-[520px] p-7 flex-col items-start gap-5 rounded-[16px] border border-[#282C2F] bg-[#111315] shadow-2xl" onClick={e => e.stopPropagation()}>
-          <span className="text-[24px] font-semibold text-[#78EF63] font-heading">✓ Ticket created</span>
-          <span className="text-[14px] font-medium text-[#EFF2F0]">#NAF-{createdTicketId} · Open</span>
-          <span className="text-[14px] text-[#A0A8AD] w-[464px] leading-relaxed">
-            Your ticket is ready. The customer confirmation will use the selected reply channel.
-          </span>
+          <span className="text-[24px] font-semibold text-[#78EF63] font-heading">{t("✓ Ticket created")}</span>
+          <span className="text-[14px] font-medium text-[#EFF2F0]">NAF-{createdTicketId} · {t('Open')}</span>
+          <span className="text-[14px] text-[#A0A8AD] w-[464px] leading-relaxed">{t("Your ticket is ready. The customer confirmation will use the selected reply channel.")}</span>
           <button onClick={resetAndClose} className="mt-2 flex h-[34px] px-3 items-center gap-2 rounded-[7px] border border-[#345135] bg-[#17241A] hover:bg-[#1a2d1e] transition-colors">
-            <span className="text-[12px] font-medium text-[#78EF63]">Back to tickets</span>
+            <span className="text-[12px] font-medium text-[#78EF63]">{t('Back to tickets')}</span>
           </button>
         </div>
       </div>
@@ -2468,39 +2537,39 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
       <div className="flex w-full max-w-[760px] p-5 sm:p-7 flex-col items-start gap-3 rounded-[16px] border border-[#282C2F] bg-[#111315] shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex w-full h-[38px] items-center gap-2.5">
-          <span className="text-[24px] font-semibold text-[#EFF2F0] font-heading">New ticket</span>
+          <span className="text-[24px] font-semibold text-[#EFF2F0] font-heading">{t("New ticket")}</span>
           <div className="flex-1"></div>
           <button onClick={resetAndClose} className="flex h-[34px] px-3 items-center justify-center rounded-[7px] border border-[#282C2F] hover:bg-white/5 transition-colors">
             <span className="text-[12px] font-medium text-[#A0A8AD]">×</span>
           </button>
         </div>
-        <span className="text-[13px] text-[#A0A8AD]">Create a support request on behalf of a customer.</span>
+        <span className="text-[13px] text-[#A0A8AD]">{t("Create a support request on behalf of a customer.")}</span>
         
         {/* Reply Channel */}
-        <div className="flex flex-col gap-2 mt-2 w-full">
-          <span className="text-[11px] font-medium text-[#A0A8AD] uppercase">REPLY CHANNEL</span>
+          <div className="flex flex-col gap-2 mt-2 w-full">
+          <span className="text-[11px] font-medium text-[#A0A8AD] uppercase">{t("REPLY CHANNEL")}</span>
           <div className="flex gap-2">
             <button onClick={() => handleChannelChange('Email')} className={`flex h-[34px] px-3 items-center rounded-[7px] border transition-colors ${channel === 'Email' ? 'border-[#345135] bg-[#17241A] text-[#78EF63]' : 'border-[#282C2F] text-[#A0A8AD]'}`}>
-              <span className="text-[12px] font-medium">Email</span>
+              <span className="text-[12px] font-medium">{t("Email")}</span>
             </button>
             <button onClick={() => handleChannelChange('WhatsApp')} className={`flex h-[34px] px-3 items-center rounded-[7px] border transition-colors ${channel === 'WhatsApp' ? 'border-[#345135] bg-[#17241A] text-[#78EF63]' : 'border-[#282C2F] text-[#A0A8AD]'}`}>
               <span className="text-[12px] font-medium">WhatsApp</span>
             </button>
           </div>
-          <span className="text-[12px] text-[#A0A8AD]">Replies will be sent by {channel.toLowerCase()}. The channel stays fixed for this ticket.</span>
+          <span className="text-[12px] text-[#A0A8AD]">{t('Replies will be sent by')} {displayChannel(channel, t)}. {t('The channel stays fixed for this ticket.')}</span>
         </div>
 
         {/* Contact Fields */}
         <div className="flex w-full flex-col sm:flex-row gap-3 sm:gap-4 mt-2">
           <div className="flex flex-col gap-1.5 flex-1">
-            <span className="text-[12px] font-medium text-[#A0A8AD]">Full name *</span>
-            <input name="ticket_customer_name" data-field="fullName" autoComplete="new-password" value={formData.fullName} onChange={handleChange} placeholder="Enter full name" 
+            <span className="text-[12px] font-medium text-[#A0A8AD]">{t("Full name *")}</span>
+            <input name="ticket_customer_name" data-field="fullName" autoComplete="new-password" value={formData.fullName} onChange={handleChange} placeholder={t("Enter full name")}
               className="h-[42px] px-3 rounded-[7px] border bg-[#0C0D0E] text-[13px] text-[#EFF2F0] placeholder:text-[#78828A] outline-none"
               style={{ borderColor: getBorderColor('fullName') }} />
           </div>
           <div className="flex flex-col gap-1.5 flex-1">
-            <span className="text-[12px] font-medium text-[#A0A8AD]">{channel === 'WhatsApp' ? 'Email (optional)' : 'Email *'}</span>
-            <input name="ticket_customer_email" data-field="email" autoComplete="new-password" value={formData.email} onChange={handleChange} placeholder="name@example.com" 
+            <span className="text-[12px] font-medium text-[#A0A8AD]">{channel === 'WhatsApp' ? t('Email (optional)') : t('Email *')}</span>
+            <input name="ticket_customer_email" data-field="email" autoComplete="new-password" value={formData.email} onChange={handleChange} placeholder={t("name@example.com")}
               className="h-[42px] px-3 rounded-[7px] border bg-[#0C0D0E] text-[13px] text-[#EFF2F0] placeholder:text-[#78828A] outline-none"
               style={{ borderColor: channel !== 'WhatsApp' ? getBorderColor('email') : '#282C2F' }} />
           </div>
@@ -2509,14 +2578,14 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
         {/* Optional Details */}
         <div className="flex w-full flex-col sm:flex-row gap-3 sm:gap-4 mt-2">
           <div className="flex flex-col gap-1.5 flex-1">
-            <span className="text-[12px] font-medium text-[#A0A8AD]">{channel === 'WhatsApp' ? 'Phone number *' : 'Phone number'}</span>
-            <input name="ticket_customer_phone" data-field="phone" autoComplete="new-password" value={formData.phone} onChange={handleChange} placeholder={channel === 'WhatsApp' ? 'Enter phone number' : 'Optional'} 
+            <span className="text-[12px] font-medium text-[#A0A8AD]">{channel === 'WhatsApp' ? t('Phone number *') : t('Phone number')}</span>
+            <input name="ticket_customer_phone" data-field="phone" autoComplete="new-password" value={formData.phone} onChange={handleChange} placeholder={channel === 'WhatsApp' ? t('Enter phone number') : t('Optional')}
               className="h-[42px] px-3 rounded-[7px] border bg-[#0C0D0E] text-[13px] text-[#EFF2F0] placeholder:text-[#78828A] outline-none"
               style={{ borderColor: channel === 'WhatsApp' ? getBorderColor('phone') : '#282C2F' }} />
           </div>
           <div className="flex flex-col gap-1.5 flex-1">
-            <span className="text-[12px] font-medium text-[#A0A8AD]">Machine ID / Location</span>
-            <input name="ticket_machine_location" data-field="location" autoComplete="off" value={formData.location} onChange={handleChange} placeholder="Optional" 
+            <span className="text-[12px] font-medium text-[#A0A8AD]">{t("Machine ID / Location")}</span>
+            <input name="ticket_machine_location" data-field="location" autoComplete="off" value={formData.location} onChange={handleChange} placeholder={t("Optional")}
               className="h-[42px] px-3 rounded-[7px] border border-[#282C2F] bg-[#0C0D0E] text-[13px] text-[#EFF2F0] placeholder:text-[#78828A] outline-none" />
           </div>
         </div>
@@ -2524,16 +2593,16 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
         {/* Classification */}
         <div className="flex w-full flex-col sm:flex-row gap-3 sm:gap-4 mt-2">
           <div className="flex flex-col gap-1.5 flex-1">
-            <span className="text-[12px] font-medium text-[#A0A8AD]">Account type *</span>
+            <span className="text-[12px] font-medium text-[#A0A8AD]">{t("Account type *")}</span>
             <DarkSelect name="accountType" value={formData.accountType} onChange={handleChange}
-              placeholder="Select account type"
+              placeholder={t("Select account type")}
               options={["Customer / Guest", "NAF Member", "Business / Partner", "Other", "Not collected"]}
               borderColor={getBorderColor('accountType')} />
           </div>
           <div className="flex flex-col gap-1.5 flex-1">
-            <span className="text-[12px] font-medium text-[#A0A8AD]">Request type *</span>
+            <span className="text-[12px] font-medium text-[#A0A8AD]">{t("Request type *")}</span>
             <DarkSelect name="requestType" value={formData.requestType} onChange={handleChange}
-              placeholder="Select request type"
+              placeholder={t("Select request type")}
               options={["Machine Issue", "Payment / Refund", "NAF Membership", "NAF Wallet", "Mobile App", "NAF Cloud System", "Reservation / Pickup", "Complaint", "Feedback / Suggestion", "Partnership / Business Support", "Other"]}
               borderColor={getBorderColor('requestType')} />
           </div>
@@ -2541,14 +2610,14 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
 
         {/* Subject & Message */}
         <div className="flex flex-col gap-1.5 mt-2 w-full">
-          <span className="text-[12px] font-medium text-[#A0A8AD]">Subject *</span>
-          <input name="ticket_subject" data-field="subject" autoComplete="off" value={formData.subject} onChange={handleChange} placeholder="Briefly describe the request" 
+          <span className="text-[12px] font-medium text-[#A0A8AD]">{t("Subject *")}</span>
+          <input name="ticket_subject" data-field="subject" autoComplete="off" value={formData.subject} onChange={handleChange} placeholder={t("Briefly describe the request")}
             className="h-[42px] px-3 rounded-[7px] border bg-[#0C0D0E] text-[13px] text-[#EFF2F0] placeholder:text-[#78828A] outline-none"
             style={{ borderColor: getBorderColor('subject') }} />
         </div>
         <div className="flex flex-col gap-1.5 mt-2 w-full">
-          <span className="text-[12px] font-medium text-[#A0A8AD]">Message / Description *</span>
-          <textarea name="ticket_description" data-field="description" autoComplete="off" value={formData.description} onChange={handleChange} placeholder="What happened? Include any details that will help us." 
+          <span className="text-[12px] font-medium text-[#A0A8AD]">{t("Message / Description *")}</span>
+          <textarea name="ticket_description" data-field="description" autoComplete="off" value={formData.description} onChange={handleChange} placeholder={t("What happened? Include any details that will help us.")}
             className="h-[78px] p-3 rounded-[7px] border bg-[#0C0D0E] text-[13px] text-[#EFF2F0] placeholder:text-[#78828A] outline-none resize-none"
             style={{ borderColor: getBorderColor('description') }} />
         </div>
@@ -2566,32 +2635,32 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
           onClick={() => fileInputRef.current?.click()}
           className="flex h-[48px] w-full items-center rounded-[7px] border border-[#282C2F] px-3 text-left hover:bg-white/5 transition-colors"
         >
-          <span className="text-[12px] text-[#A0A8AD]">{attachments.length ? `${attachments.length} file${attachments.length > 1 ? 's' : ''} selected` : '+ Add photos, video or audio'}</span>
+          <span className="text-[12px] text-[#A0A8AD]">{attachments.length ? `${attachments.length} ${t(attachments.length > 1 ? 'files selected' : 'file selected')}` : t('+ Add photos, video or audio')}</span>
         </button>
 
         {/* Notification choice */}
         <div className="flex flex-col gap-1 mt-2 w-full">
           <div className="flex items-center gap-2">
             <Check className="w-3.5 h-3.5" style={{ color: COLORS.primary[500] }} />
-            <span className="text-[12px] text-[#EFF2F0]">{channel === 'WhatsApp' ? 'Send a confirmation on WhatsApp' : 'Send a ticket confirmation to the customer'}</span>
+            <span className="text-[12px] text-[#EFF2F0]">{channel === 'WhatsApp' ? t('Send a confirmation on WhatsApp') : t('Send a ticket confirmation to the customer')}</span>
           </div>
-          <span className="text-[11px] text-[#A0A8AD]">{channel === 'WhatsApp' ? 'Replies will be sent by WhatsApp. A phone number is required.' : 'New tickets start as Open. * Required fields'}</span>
+          <span className="text-[11px] text-[#A0A8AD]">{channel === 'WhatsApp' ? t('Replies will be sent by WhatsApp. A phone number is required.') : t('New tickets start as Open. * Required fields')}</span>
         </div>
 
         <div className="w-full h-[1px] bg-[#282C2F] mt-2"></div>
 
         {/* Errors & Footer */}
         {showErrors && (
-          <span className="text-[12px] text-[#F38C86]">Please complete the required fields before creating this ticket.</span>
+          <span className="text-[12px] text-[#F38C86]">{t("Please complete the required fields before creating this ticket.")}</span>
         )}
         {submitError && <span className="text-[12px] text-[#F38C86]">{submitError}</span>}
         
         <div className="flex w-full justify-end items-center gap-2.5 mt-1">
           <button onClick={resetAndClose} className="flex h-[34px] px-3 items-center justify-center rounded-[7px] border border-[#282C2F] hover:bg-white/5 transition-colors">
-            <span className="text-[12px] font-medium text-[#A0A8AD]">Cancel</span>
+            <span className="text-[12px] font-medium text-[#A0A8AD]">{t("Cancel")}</span>
           </button>
           <button onClick={handleSubmit} disabled={isSubmitting} className="flex h-[34px] items-center justify-center rounded-[7px] border border-[#345135] bg-[#78EF63] px-3 text-[12px] font-medium text-[#0C0D0E] hover:opacity-90 transition-opacity disabled:opacity-50">
-            {isSubmitting ? '...' : 'Create ticket'}
+            {isSubmitting ? '...' : t('Create ticket')}
           </button>
         </div>
       </div>

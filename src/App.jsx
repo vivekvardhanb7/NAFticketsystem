@@ -34,6 +34,9 @@ import { COLORS, getAuthHeaders, timeAgo } from './designTokens';
 import { useTranslation } from './i18n.jsx';
 
 const TICKETS_PER_PAGE = 10;
+// WhatsApp remains supported by the webhook code for a future release, but is
+// intentionally hidden from this deployment's dashboard and ticket form.
+const WHATSAPP_ENABLED = false;
 const N8N_TICKET_EVENTS_URL = import.meta.env.VITE_N8N_TICKET_EVENTS_URL || 'https://n8n.naf-cloudsystem.de/webhook/ticket-events';
 const N8N_WHATSAPP_TICKET_EVENTS_URL = import.meta.env.VITE_N8N_WHATSAPP_TICKET_EVENTS_URL || 'https://n8n.naf-cloudsystem.de/webhook/whatsapp-ticket-events';
 const DISPLAY_TIME_ZONE = 'Europe/Berlin';
@@ -390,8 +393,13 @@ function displayAccountType(value, t) {
   return t(ACCOUNT_TYPE_MAPPING[value] || value || 'Customer / Guest');
 }
 
+function getUiChannel(value) {
+  const normalized = normalizeChannel(value);
+  return !WHATSAPP_ENABLED && normalized === 'WhatsApp' ? 'Email' : normalized;
+}
+
 function displayChannel(value, t) {
-  return t(normalizeChannel(value));
+  return t(getUiChannel(value));
 }
 
 function extractEmailAddress(...values) {
@@ -1051,12 +1059,10 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
   }, [tickets, filter]);
 
   const channelCounts = useMemo(() => {
-    const counts = { 'Website form': 0, 'Email': 0, 'WhatsApp': 0 };
+    const counts = { 'Website form': 0, 'Email': 0 };
     statusScopedTickets.forEach(t => {
-      const ch = (t.channel || 'Website form').toLowerCase();
-      if (ch.includes('email')) counts['Email']++;
-      else if (ch.includes('whatsapp')) counts['WhatsApp']++;
-      else counts['Website form']++;
+      const channel = getUiChannel(t.channel || 'Website form');
+      counts[channel]++;
     });
     return counts;
   }, [statusScopedTickets]);
@@ -1081,7 +1087,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
     }
 
     if (channelFilter !== 'All') {
-      result = result.filter(t => (t.channel || 'Website form').toLowerCase() === channelFilter.toLowerCase());
+      result = result.filter(t => getUiChannel(t.channel || 'Website form').toLowerCase() === channelFilter.toLowerCase());
     }
 
     if (reqTypeFilter !== 'All') {
@@ -1273,7 +1279,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
       <div className="flex min-h-[66px] flex-wrap items-center gap-3 md:flex-nowrap">
         <div className="flex min-w-0 basis-[280px] flex-1 flex-col gap-1">
           <h1 className="text-[28px] font-semibold leading-[38px] m-0" style={{ color: COLORS.text.heading }}>{t("Support workspace")}</h1>
-          <p className="text-[13px] m-0" style={{ color: COLORS.text.body }}>{t("Every request. One queue. Website form, email and WhatsApp.")}</p>
+          <p className="text-[13px] m-0" style={{ color: COLORS.text.body }}>{t("Every request. One queue. Website form and email.")}</p>
         </div>
         <div className="flex h-[34px] shrink-0 items-center rounded-[7px] border px-3"
           style={{ borderColor: COLORS.border }}>
@@ -1388,7 +1394,6 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
               <PillButton label="All channels" count={statusScopedTickets.length} active={channelFilter === 'All'} onClick={() => setChannelFilter('All')} />
               <PillButton label="Website form" count={channelCounts['Website form']} active={channelFilter === 'Website form'} onClick={() => setChannelFilter('Website form')} />
               <PillButton label="Email" count={channelCounts['Email']} active={channelFilter === 'Email'} onClick={() => setChannelFilter('Email')} />
-              <PillButton label="WhatsApp" count={channelCounts['WhatsApp']} active={channelFilter === 'WhatsApp'} onClick={() => setChannelFilter('WhatsApp')} />
   
               <div className="w-6" />
   
@@ -1739,7 +1744,7 @@ function DeleteModal({ isAuthenticated, ticket, onClose, setTickets, setToast })
 /* -------------------------------------------------------------------------- */
 function AdminTicketRow({ ticket, isSelected, onClick, visibleColumns }) {
   const { t, lang, locale } = useTranslation();
-  const channel = ticket.channel || 'Website form';
+  const channel = getUiChannel(ticket.channel || 'Website form');
   const machineIdMissing = isMissingValue(ticket.machineId);
   const locationMissing = isMissingValue(ticket.location);
   const mediaCount = ticket.media?.length || 0;
@@ -2551,9 +2556,6 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
           <div className="flex gap-2">
             <button onClick={() => handleChannelChange('Email')} className={`flex h-[34px] px-3 items-center rounded-[7px] border transition-colors ${channel === 'Email' ? 'border-[#345135] bg-[#17241A] text-[#78EF63]' : 'border-[#282C2F] text-[#A0A8AD]'}`}>
               <span className="text-[12px] font-medium">{t("Email")}</span>
-            </button>
-            <button onClick={() => handleChannelChange('WhatsApp')} className={`flex h-[34px] px-3 items-center rounded-[7px] border transition-colors ${channel === 'WhatsApp' ? 'border-[#345135] bg-[#17241A] text-[#78EF63]' : 'border-[#282C2F] text-[#A0A8AD]'}`}>
-              <span className="text-[12px] font-medium">WhatsApp</span>
             </button>
           </div>
           <span className="text-[12px] text-[#A0A8AD]">{t('Replies will be sent by')} {displayChannel(channel, t)}. {t('The channel stays fixed for this ticket.')}</span>

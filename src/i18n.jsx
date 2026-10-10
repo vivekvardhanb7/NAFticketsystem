@@ -31,7 +31,7 @@ const de = {
 
   // ── Dashboard KPIs ──
   'Support workspace': 'Support-Arbeitsbereich',
-  'Every request. One queue. Website form, email and WhatsApp.': 'Alle Anfragen an einem Ort – über Webformular, E-Mail und WhatsApp.',
+  'Every request. One queue. Website form and email.': 'Alle Anfragen an einem Ort – über Webformular und E-Mail.',
   '+  New ticket': '+  Neues Ticket',
   'Open': 'Offen',
   'Awaiting response': 'Wartet auf Antwort',

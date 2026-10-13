@@ -2118,7 +2118,10 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                           const attachmentType = getAttachmentType(normalizedAttachment, attachmentUrl, getAttachmentName(normalizedAttachment, attachmentUrl));
                           const isImageAttachment = attachmentType.startsWith('image') || /\.(png|jpe?g|gif|webp|avif)$/i.test(attachmentUrl || '');
                           const attachmentLabel = getAttachmentName(normalizedAttachment, attachmentUrl);
-                          const content = <><ImageIcon className="h-3 w-3" />{attachmentLabel} · {isImageAttachment ? t('Image') : t('File')}</>;
+                          const content = <>{isImageAttachment
+                            ? <ImageIcon className="h-3 w-3" />
+                            : <FileText className="h-3 w-3" />
+                          }{attachmentLabel} · {isImageAttachment ? t('Image') : t('File')}</>;
                           return attachmentUrl && isImageAttachment ? (
                             <button key={j} type="button" onClick={() => setPreviewAttachment({ ...normalizedAttachment, url: attachmentUrl })}
                               className="flex w-fit max-w-[240px] flex-col items-start gap-2 rounded-[8px] border border-[#26352A] bg-[#0A100B] p-2 text-left text-[11px] text-[#78EF63] transition-colors hover:border-[#78EF63]/50">
@@ -2130,8 +2133,6 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                             <a
                               key={j}
                               href={attachmentUrl}
-                              target="_blank"
-                              rel="noreferrer"
                               title={t('Open attachment')}
                               className="flex w-fit max-w-full cursor-pointer items-center gap-1 text-[11px] text-[#78EF63] underline decoration-[#78EF63]/40 underline-offset-2 transition-colors hover:text-white"
                             >

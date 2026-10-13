@@ -127,11 +127,19 @@ function getAttachmentName(attachment, attachmentUrl = '') {
   const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1);
   if (!lastSegment) return 'Attachment';
 
+  let filename = lastSegment;
   try {
-    return decodeURIComponent(lastSegment);
+    filename = decodeURIComponent(lastSegment);
   } catch {
-    return lastSegment;
+    // Keep the URL segment when it is not URI encoded correctly.
   }
+
+  // Staging stores uploaded files as <generated-uuid>_<original-name>.
+  // Show only the original filename in the dashboard.
+  return filename.replace(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[_-]/i,
+    ''
+  ) || 'Attachment';
 }
 
 function getAttachmentType(attachment, attachmentUrl = '', attachmentName = '') {

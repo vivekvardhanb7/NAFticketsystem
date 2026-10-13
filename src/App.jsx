@@ -171,11 +171,12 @@ function normalizeAttachment(attachment) {
 }
 
 function fileAttachmentMetadata(file) {
+  const isPreviewable = file.type?.startsWith('image/') || file.type === 'application/pdf';
   return {
     name: file.name,
     size: file.size,
     type: file.type,
-    url: file.type?.startsWith('image/') ? URL.createObjectURL(file) : ''
+    url: isPreviewable ? URL.createObjectURL(file) : ''
   };
 }
 

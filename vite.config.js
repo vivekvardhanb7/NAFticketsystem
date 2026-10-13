@@ -7,12 +7,12 @@ export default defineConfig({
     server: {
         proxy: {
             '/api': {
-                target: 'https://testing-api.naf-cloudsystem.de',
+                target: 'https://staging-api.naf-cloudsystem.de',
                 changeOrigin: true,
                 secure: false,
                 configure: (proxy, _options) => {
                     proxy.on('proxyReq', (proxyReq, req, _res) => {
-                        proxyReq.setHeader('Origin', 'https://testing-api.naf-cloudsystem.de');
+                        proxyReq.setHeader('Origin', 'https://staging-api.naf-cloudsystem.de');
                     });
                 },
             },

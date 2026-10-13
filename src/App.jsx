@@ -98,6 +98,7 @@ function formatTicketDate(value, locale = 'de-DE') {
 
 function getAttachmentPreviewUrl(attachment) {
   if (!attachment) return '';
+  if (typeof attachment === 'string') return attachment.trim();
   const directUrl = attachment.url
     || attachment.dataUrl
     || attachment.previewUrl
@@ -114,6 +115,51 @@ function getAttachmentPreviewUrl(attachment) {
   const mimeType = attachment.type || attachment.mimeType || attachment.contentType || '';
   if (mimeType.startsWith('image')) return `data:${mimeType};base64,${rawData}`;
   return '';
+}
+
+function getAttachmentName(attachment, attachmentUrl = '') {
+  if (attachment && typeof attachment === 'object' && attachment.name) {
+    return String(attachment.name);
+  }
+
+  const source = attachmentUrl || (typeof attachment === 'string' ? attachment : '');
+  const pathname = String(source).split(/[?#]/)[0];
+  const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1);
+  if (!lastSegment) return 'Attachment';
+
+  try {
+    return decodeURIComponent(lastSegment);
+  } catch {
+    return lastSegment;
+  }
+}
+
+function getAttachmentType(attachment, attachmentUrl = '', attachmentName = '') {
+  if (attachment && typeof attachment === 'object') {
+    const declaredType = attachment.type || attachment.mimeType || attachment.contentType || '';
+    if (declaredType) return declaredType;
+  }
+
+  const source = `${attachmentName} ${attachmentUrl}`;
+  return /\.(png|jpe?g|gif|webp|avif|svg)(?:$|[?#])/i.test(source) ? 'image/*' : '';
+}
+
+function normalizeAttachment(attachment) {
+  if (!attachment) return attachment;
+  const attachmentUrl = getAttachmentPreviewUrl(attachment);
+  const attachmentName = getAttachmentName(attachment, attachmentUrl);
+  const attachmentType = getAttachmentType(attachment, attachmentUrl, attachmentName);
+
+  if (typeof attachment === 'string') {
+    return { url: attachmentUrl, name: attachmentName, type: attachmentType };
+  }
+
+  return {
+    ...attachment,
+    ...(attachmentUrl && !attachment.url ? { url: attachmentUrl } : {}),
+    ...(attachmentName && !attachment.name ? { name: attachmentName } : {}),
+    ...(attachmentType && !attachment.type ? { type: attachmentType } : {})
+  };
 }
 
 function fileAttachmentMetadata(file) {
@@ -205,7 +251,8 @@ async function hydrateAttachmentPreviews(ticketId, history) {
     return history.map(email => ({
       ...email,
       attachments: (email.attachments || []).map(attachment => {
-        const attachmentName = String(attachment.name || '').trim().toLowerCase();
+        const normalizedAttachment = normalizeAttachment(attachment);
+        const attachmentName = String(normalizedAttachment?.name || '').trim().toLowerCase();
         const attachmentSize = Number(attachment.size || 0);
         const record = records.find(item => {
           const recordName = String(item.name || '').trim().toLowerCase();
@@ -215,8 +262,8 @@ async function hydrateAttachmentPreviews(ticketId, history) {
           return sameName && (sameSize || attachmentSize === 0 || recordSize === 0);
         });
         return record
-          ? { ...attachment, type: attachment.type || record.type, url: attachment.url || record.dataUrl }
-          : attachment;
+          ? { ...normalizedAttachment, type: normalizedAttachment.type || record.type, url: normalizedAttachment.url || record.dataUrl }
+          : normalizedAttachment;
       })
     }));
   } catch (error) {
@@ -1027,6 +1074,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
           const data = await res.json();
           const mappedData = data.map(email => ({
             ...email,
+            attachments: (email.attachments || []).map(normalizeAttachment),
             direction: email.direction === 'outbound' ? 'sent' : 'received'
           }));
           const hydratedData = await hydrateAttachmentPreviews(activeTicket.id, mappedData);
@@ -1222,14 +1270,16 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
         senderEmail: 'support@naf-halsbach.de', // Admin sender email
         senderType: emailData.senderType,
         direction: 'outbound',
-        sentAt: emailData.sentAt,
         attachments: (emailData.attachments || []).map(({ name, size, type }) => ({ name, size, type }))
       };
 
       const formData = new FormData();
-      (Array.isArray(attachmentFiles) ? attachmentFiles : []).forEach((file) => {
+      const files = (Array.isArray(attachmentFiles) ? attachmentFiles : []).filter(Boolean);
+      files.forEach((file) => {
         if (file) formData.append('attachments', file, file.name);
       });
+      // Staging expects the multipart field even for a text-only reply.
+      if (files.length === 0) formData.append('attachments', '');
 
       const emailUrl = `/api/NAFWebsite/issue/${encodeURIComponent(ticketId)}/emails?emailData=${encodeURIComponent(JSON.stringify(postBody))}`;
       const response = await fetch(emailUrl, {
@@ -2063,13 +2113,14 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                     <div className="flex flex-col gap-1 mt-1">
                       {msg.attachments.map((att, j) => (
                         (() => {
-                          const attachmentUrl = getAttachmentPreviewUrl(att);
-                          const attachmentType = att.type || att.mimeType || att.contentType || '';
-                          const isImageAttachment = attachmentType.startsWith('image') || /\.(png|jpe?g|gif|webp|avif)$/i.test(attachmentUrl || att.name || '');
-                          const attachmentLabel = att.name || attachmentUrl.split('/').pop() || 'Attachment';
+                          const normalizedAttachment = normalizeAttachment(att);
+                          const attachmentUrl = getAttachmentPreviewUrl(normalizedAttachment);
+                          const attachmentType = getAttachmentType(normalizedAttachment, attachmentUrl, getAttachmentName(normalizedAttachment, attachmentUrl));
+                          const isImageAttachment = attachmentType.startsWith('image') || /\.(png|jpe?g|gif|webp|avif)$/i.test(attachmentUrl || '');
+                          const attachmentLabel = getAttachmentName(normalizedAttachment, attachmentUrl);
                           const content = <><ImageIcon className="h-3 w-3" />{attachmentLabel} · {isImageAttachment ? t('Image') : t('File')}</>;
                           return attachmentUrl && isImageAttachment ? (
-                            <button key={j} type="button" onClick={() => setPreviewAttachment({ ...att, url: attachmentUrl })}
+                            <button key={j} type="button" onClick={() => setPreviewAttachment({ ...normalizedAttachment, url: attachmentUrl })}
                               className="flex w-fit max-w-[240px] flex-col items-start gap-2 rounded-[8px] border border-[#26352A] bg-[#0A100B] p-2 text-left text-[11px] text-[#78EF63] transition-colors hover:border-[#78EF63]/50">
                               <img src={attachmentUrl} alt={attachmentLabel} onError={(event) => { event.currentTarget.style.display = 'none'; }}
                                 className="h-[120px] w-[180px] rounded-[5px] border border-[#212429] object-cover" />

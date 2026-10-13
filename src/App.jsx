@@ -1211,7 +1211,7 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
     }
   };
 
-  const handleEmailSent = async (ticketId, emailData) => {
+  const handleEmailSent = async (ticketId, emailData, attachmentFiles = []) => {
     // Store in API
     try {
       const headers = getAuthHeaders(isAuthenticated);
@@ -1226,11 +1226,18 @@ function AdminDashboard({ isAuthenticated, tickets, loading, refreshing, fetchEr
         attachments: (emailData.attachments || []).map(({ name, size, type }) => ({ name, size, type }))
       };
 
-      await fetch(`/api/NAFWebsite/issue/${ticketId}/emails`, {
-        method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify(postBody)
+      const formData = new FormData();
+      (Array.isArray(attachmentFiles) ? attachmentFiles : []).forEach((file) => {
+        if (file) formData.append('attachments', file, file.name);
       });
+
+      const emailUrl = `/api/NAFWebsite/issue/${encodeURIComponent(ticketId)}/emails?emailData=${encodeURIComponent(JSON.stringify(postBody))}`;
+      const response = await fetch(emailUrl, {
+        method: 'POST',
+        headers,
+        body: formData
+      });
+      if (!response.ok) throw new Error(`Email history request failed with ${response.status}.`);
     } catch (err) {
       console.error("Failed to store email history in API:", err);
     }
@@ -1889,7 +1896,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
       };
       
       await persistAttachmentPreviews(ticket.id, replyAttachments);
-      await onEmailSent(ticket.id, newEmail);
+      await onEmailSent(ticket.id, newEmail, replyAttachments);
       const destination = channel === 'WhatsApp' ? ticket.phone : ticket.email;
       setToast({
         title: webhookSuccess ? t('Reply sent') : t('Reply saved, delivery failed'),
@@ -2255,9 +2262,9 @@ function EmailModal({ ticket, onClose, setToast, onEmailSent }) {
 
     await persistAttachmentPreviews(ticket.id, attachments);
     if (ticket.onEmailSent) {
-      ticket.onEmailSent(ticket.id, newEmail);
+      ticket.onEmailSent(ticket.id, newEmail, attachments);
     } else if (onEmailSent) {
-      onEmailSent(ticket.id, newEmail);
+      onEmailSent(ticket.id, newEmail, attachments);
     }
 
     if (setToast) {

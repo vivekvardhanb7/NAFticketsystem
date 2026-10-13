@@ -2386,8 +2386,10 @@ function NewTicketModal({ isOpen, onClose, onTicketCreated, isAuthenticated }) {
   if (!isOpen) return null;
 
   const handleChange = (e) => {
-    const fieldName = e.target.dataset.field || e.target.name;
-    setFormData(prev => ({ ...prev, [fieldName]: e.target.value }));
+    const target = e?.target || {};
+    const fieldName = target.dataset?.field || target.name;
+    if (!fieldName) return;
+    setFormData(prev => ({ ...prev, [fieldName]: target.value }));
     setSubmitError('');
   };
 

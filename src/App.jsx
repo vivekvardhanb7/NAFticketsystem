@@ -2118,6 +2118,7 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                           const attachmentType = getAttachmentType(normalizedAttachment, attachmentUrl, getAttachmentName(normalizedAttachment, attachmentUrl));
                           const isImageAttachment = attachmentType.startsWith('image') || /\.(png|jpe?g|gif|webp|avif)$/i.test(attachmentUrl || '');
                           const attachmentLabel = getAttachmentName(normalizedAttachment, attachmentUrl);
+                          const isPdfAttachment = attachmentType === 'application/pdf' || /\.pdf(?:$|[?#])/i.test(attachmentUrl || attachmentLabel);
                           const content = <>{isImageAttachment
                             ? <ImageIcon className="h-3 w-3" />
                             : <FileText className="h-3 w-3" />
@@ -2128,6 +2129,16 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                               <img src={attachmentUrl} alt={attachmentLabel} onError={(event) => { event.currentTarget.style.display = 'none'; }}
                                 className="h-[120px] w-[180px] rounded-[5px] border border-[#212429] object-cover" />
                               <span className="flex max-w-full items-center gap-1 truncate">{content}</span>
+                            </button>
+                          ) : attachmentUrl && isPdfAttachment ? (
+                            <button
+                              key={j}
+                              type="button"
+                              onClick={() => setPreviewAttachment({ ...normalizedAttachment, url: attachmentUrl, isPdf: true })}
+                              title={t('Open attachment')}
+                              className="flex w-fit max-w-full cursor-pointer items-center gap-1 text-[11px] text-[#78EF63] underline decoration-[#78EF63]/40 underline-offset-2 transition-colors hover:text-white"
+                            >
+                              {content}
                             </button>
                           ) : attachmentUrl ? (
                             <a
@@ -2245,12 +2256,20 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
           onClick={() => setPreviewAttachment(null)}>
           <div className="relative max-h-full max-w-full rounded-[10px] border border-[#282C2F] bg-[#111315] p-3 shadow-2xl"
             onClick={(event) => event.stopPropagation()}>
-            <button type="button" aria-label={t("Close image preview")} onClick={() => setPreviewAttachment(null)}
+            <button type="button" aria-label={t("Close attachment preview")} onClick={() => setPreviewAttachment(null)}
               className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-[7px] border border-[#282C2F] bg-[#0C0D0E]/90 text-[#A0A8AD] hover:text-white">
               <X className="h-4 w-4" />
             </button>
-            <img src={previewAttachment.url} alt={previewAttachment.name || t('Ticket attachment')}
-              className="max-h-[80vh] max-w-[min(90vw,1100px)] rounded-[6px] object-contain" />
+            {previewAttachment.isPdf ? (
+              <iframe
+                src={previewAttachment.url}
+                title={previewAttachment.name || t('Ticket attachment')}
+                className="h-[80vh] w-[min(90vw,1100px)] rounded-[6px] bg-white"
+              />
+            ) : (
+              <img src={previewAttachment.url} alt={previewAttachment.name || t('Ticket attachment')}
+                className="max-h-[80vh] max-w-[min(90vw,1100px)] rounded-[6px] object-contain" />
+            )}
           </div>
         </div>
       )}

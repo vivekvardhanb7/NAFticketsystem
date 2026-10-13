@@ -2126,6 +2126,17 @@ function TicketDetailPage({ ticket, emails, onBack, onStatusChange, isUpdating, 
                                 className="h-[120px] w-[180px] rounded-[5px] border border-[#212429] object-cover" />
                               <span className="flex max-w-full items-center gap-1 truncate">{content}</span>
                             </button>
+                          ) : attachmentUrl ? (
+                            <a
+                              key={j}
+                              href={attachmentUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={t('Open attachment')}
+                              className="flex w-fit max-w-full cursor-pointer items-center gap-1 text-[11px] text-[#78EF63] underline decoration-[#78EF63]/40 underline-offset-2 transition-colors hover:text-white"
+                            >
+                              {content}
+                            </a>
                           ) : (
                             <span key={j} className="flex items-center gap-1 text-[11px] text-[#78EF63]">
                               {content}
